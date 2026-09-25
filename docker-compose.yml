@@ -50,18 +50,7 @@ services:
       init:
         condition: service_completed_successfully
 
-  gradio:
-    build: .
-    command: python gradio_app.py
-    environment:
-      - API_BASE_URL=http://api:5000/api
-      - GRADIO_PORT=7860
-    ports:
-      - "7860:7860"
-    depends_on:
-      - api
-
-  # Plain HTML/CSS/JS sample frontend (frontend/), served as static files by FastAPI.
+  # Web frontend (frontend/), served as static files by FastAPI/Uvicorn.
   # Its JS calls the Flask API directly from the browser at http://localhost:5000/api
   # (see frontend/app.js's API_BASE) -- not http://api:5000, which only resolves inside
   # this Docker network, not from the host browser.

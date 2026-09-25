@@ -15,11 +15,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Belt-and-braces for the gradio service: it also creates this at startup (gradio_app.py),
-# but pre-creating it here means it exists even if something else in the container's
-# lifecycle clears /tmp between build and first request.
-RUN mkdir -p /tmp/gradio
-
 ENV FLASK_APP=run.py \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
