@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FinSight — Multi-Agent Financial Analysis</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app-shell">
+
+  <!-- ============ LEFT: SOURCES & SETUP ============ -->
+  <aside class="pane pane-sources">
+    <div class="brand">
+      <div class="brand-mark">FS</div>
+      <div>
+        <div class="brand-title">FinSight</div>
+        <div class="brand-subtitle">Multi-Agent Financial Analysis</div>
+      </div>
+    </div>
+
+    <div class="pane-scroll">
+      <section class="block">
+        <h2 class="block-title">New analysis</h2>
+
+        <div id="dropzone" class="dropzone">
+          <div class="dropzone-icon">⬆</div>
+          <div class="dropzone-text">Drop files here or click to browse</div>
+          <div class="dropzone-hint">CSV · Excel · PDF</div>
+          <input type="file" id="files-input" multiple hidden>
+        </div>
+        <ul id="file-list" class="file-list"></ul>
+
+        <label class="field-label" for="goal-input">Goal</label>
+        <input type="text" id="goal-input" value="Full financial analysis for demo entity">
+
+        <label class="field-label" for="template-input">Plan template</label>
+        <select id="template-input">
+          <option value="full_analysis" selected>full_analysis</option>
+          <option value="bank_statement_review">bank_statement_review</option>
+          <option value="gst_reconciliation">gst_reconciliation</option>
+          <option value="lender_credit_memo">lender_credit_memo</option>
+        </select>
+
+        <button id="run-btn" class="btn btn-primary btn-block">Run pipeline</button>
+      </section>
+
+      <section class="block">
+        <h2 class="block-title">Sessions</h2>
+        <p class="hint">Jobs you've run from this browser.</p>
+        <ul id="session-list" class="session-list">
+          <li class="hint session-empty">No sessions yet.</li>
+        </ul>
+        <label class="field-label" for="manual-job-id">Open a job by id</label>
+        <div class="inline-form">
+          <input type="text" id="manual-job-id" class="mono" placeholder="job_...">
+          <button id="manual-open-btn" class="btn btn-secondary btn-sm">Open</button>
+        </div>
+      </section>
+
+      <section class="block">
+        <details id="llm-settings-details">
+          <summary class="block-title">LLM &amp; API keys</summary>
+          <div id="llm-status" class="status-box">Loading LLM status…</div>
+          <button id="llm-refresh-btn" class="btn btn-secondary btn-sm">Refresh</button>
+
+          <label class="field-label" for="openai-key-input">OpenAI API key</label>
+          <input type="password" id="openai-key-input" placeholder="sk-proj-...">
+          <label class="field-label" for="gemini-key-input">Gemini API key</label>
+          <input type="password" id="gemini-key-input" placeholder="AIzaSy...">
+          <label class="field-label" for="backend-select">Active provider</label>
+          <select id="backend-select">
+            <option value="auto">Auto (uses whichever key is set)</option>
+            <option value="openai">OpenAI Fast (gpt-4o-mini)</option>
+            <option value="openai_reasoning">OpenAI Reasoning (gpt-4o)</option>
+            <option value="gemini">Gemini Fast (gemini-2.0-flash)</option>
+            <option value="gemini_reasoning">Gemini Reasoning (gemini-1.5-pro)</option>
+            <option value="real">Custom endpoint</option>
+            <option value="fake">Fake mock (offline / tests)</option>
+          </select>
+          <label class="checkbox-label"><input type="checkbox" id="parallel-checkbox" checked> Parallel LLM calls</label>
+          <button id="llm-save-btn" class="btn btn-primary btn-sm btn-block">Save &amp; apply</button>
+          <p id="llm-save-msg" class="status-message"></p>
+        </details>
+      </section>
+    </div>
+  </aside>
+
+  <!-- ============ CENTER: THINKING STREAM ============ -->
+  <main class="pane pane-thinking">
+    <div class="thinking-header">
+      <div class="thinking-header-top">
+        <div>
+          <div class="thinking-title">Agent activity</div>
+          <div id="job-meta" class="job-meta">No job running yet — upload documents on the left to begin.</div>
+        </div>
+        <div id="status-pill" class="status-pill status-pill-idle">Idle</div>
+      </div>
+      <div class="progress-track"><div id="progress-bar" class="progress-fill" style="width:0%"></div></div>
+    </div>
+
+    <div id="stream" class="stream">
+      <div class="stream-placeholder">
+        <div class="stream-placeholder-icon">🧠</div>
+        <p>This is where you'll watch the orchestrator hand work to each agent — intake,
+        extraction, schema mapping, reconciliation, the analysis modules, insight synthesis,
+        chart building, report writing, and verification — as it actually happens, with each
+        agent's own reasoning and confidence.</p>
+      </div>
+    </div>
+
+    <div id="chat-hint" class="chat-hint">💬 Ask a question once analysis is running or done.</div>
+    <div class="chat-bar">
+      <input type="text" id="ask-input" placeholder="Ask a question about this analysis… (e.g. What is the current ratio?)">
+      <label class="auto-toggle" title="When on, the orchestrator picks its best-ranked option itself instead of asking you to choose.">
+        <input type="checkbox" id="auto-decide-toggle"> Auto
+      </label>
+      <button id="ask-btn" class="btn btn-primary">Send</button>
+    </div>
+  </main>
+
+  <!-- ============ RIGHT: STUDIO / RESULTS ============ -->
+  <aside class="pane pane-studio">
+    <div class="pane-scroll">
+      <div class="studio-header">
+        <h2 class="block-title">Studio</h2>
+        <button id="studio-refresh-btn" class="btn btn-secondary btn-sm">Refresh</button>
+      </div>
+
+      <section id="review-section" class="block review-block hidden">
+        <h3 class="block-title-sm">⏸ Needs your review</h3>
+        <p class="hint">A reconciliation check didn't tie out. Read the explanation, then accept it
+          (or correct a mapping below) to let the job continue.</p>
+        <div id="recon-list" class="recon-list"></div>
+        <button id="accept-recon-btn" class="btn btn-primary btn-sm btn-block">Accept all &amp; resume</button>
+        <details id="mapping-details">
+          <summary>Low-confidence mappings (informational, already auto-approved)</summary>
+          <div class="table-wrap"><table id="mapping-table"><thead><tr>
+            <th>ID</th><th>Label</th><th>Suggested</th><th>Conf.</th>
+          </tr></thead><tbody></tbody></table></div>
+          <div class="inline-form">
+            <input type="text" id="correct-item-id" class="mono" placeholder="review item id">
+            <input type="text" id="correct-account-id" class="mono" placeholder="correct account id">
+            <button id="correct-mapping-btn" class="btn btn-secondary btn-sm">Fix</button>
+          </div>
+          <p id="correct-result-msg" class="status-message"></p>
+        </details>
+      </section>
+
+      <section class="block">
+        <h3 class="block-title-sm">Report</h3>
+        <div id="report-empty" class="hint">Not generated yet.</div>
+        <div id="report-actions" class="download-row hidden">
+          <a id="download-docx" class="btn btn-secondary btn-sm" href="#" target="_blank">DOCX</a>
+          <a id="download-pdf" class="btn btn-secondary btn-sm" href="#" target="_blank">PDF</a>
+        </div>
+        <iframe id="report-frame" class="report-frame hidden" title="Report"></iframe>
+      </section>
+
+      <section class="block">
+        <h3 class="block-title-sm">Charts</h3>
+        <div id="charts-empty" class="hint">No charts yet.</div>
+        <div id="charts-gallery" class="charts-gallery"></div>
+      </section>
+
+      <section class="block">
+        <details>
+          <summary class="block-title-sm">Metrics</summary>
+          <div class="table-wrap"><table id="metrics-table"><thead><tr>
+            <th>Metric</th><th>Period</th><th>Value</th><th>Unit</th>
+          </tr></thead><tbody></tbody></table></div>
+        </details>
+      </section>
+
+      <section class="block">
+        <details>
+          <summary class="block-title-sm">Findings</summary>
+          <div class="table-wrap"><table id="findings-table"><thead><tr>
+            <th>Module</th><th>Sev.</th><th>Title</th>
+          </tr></thead><tbody></tbody></table></div>
+        </details>
+      </section>
+    </div>
+  </aside>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

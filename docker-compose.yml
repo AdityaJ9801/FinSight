@@ -1,0 +1,77 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # One-shot: creates tables/views + canonical CoA, and the demo tenant/admin user.
+  # Idempotent (checks before insert), so re-running `docker compose up` is safe.
+  init:
+    build: .
+    command: sh -c "flask init-db && flask seed-demo"
+    env_file: .env.docker
+    volumes:
+      - instance_data:/app/instance
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  api:
+    build: .
+    command: flask run --host=0.0.0.0 --port=5000
+    env_file: .env.docker
+    ports:
+      - "5000:5000"
+    volumes:
+      - instance_data:/app/instance
+    depends_on:
+      redis:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+
+  worker:
+    build: .
+    # No --pool=solo here (that's only needed on native Windows, see README) -- Linux
+    # containers support Celery's default prefork pool, so this gets real multi-process
+    # concurrency across jobs for free.
+    command: celery -A app.workers.celery_app worker -l info --concurrency=2
+    env_file: .env.docker
+    volumes:
+      - instance_data:/app/instance
+    depends_on:
+      redis:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+
+  gradio:
+    build: .
+    command: python gradio_app.py
+    environment:
+      - API_BASE_URL=http://api:5000/api
+      - GRADIO_PORT=7860
+    ports:
+      - "7860:7860"
+    depends_on:
+      - api
+
+  # Plain HTML/CSS/JS sample frontend (frontend/), served as static files by FastAPI.
+  # Its JS calls the Flask API directly from the browser at http://localhost:5000/api
+  # (see frontend/app.js's API_BASE) -- not http://api:5000, which only resolves inside
+  # this Docker network, not from the host browser.
+  frontend:
+    build: .
+    command: uvicorn frontend_server:app --host 0.0.0.0 --port 8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      - api
+
+volumes:
+  instance_data:

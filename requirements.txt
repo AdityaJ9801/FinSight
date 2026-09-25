@@ -1,0 +1,36 @@
+Flask==3.0.3
+Flask-SQLAlchemy==3.1.1
+Flask-Cors==4.0.1
+SQLAlchemy==2.0.35
+celery==5.4.0
+redis==5.0.8
+pydantic==2.9.2
+python-dotenv==1.0.1
+pandas==2.2.3
+openpyxl==3.1.5
+pdfplumber==0.11.4
+PyMuPDF==1.24.11
+pytesseract==0.3.13
+statsmodels==0.14.4
+scikit-learn==1.5.2
+numpy==2.1.2
+matplotlib==3.9.2
+python-docx==1.1.2
+xhtml2pdf==0.2.16
+requests==2.32.3
+beautifulsoup4==4.12.3
+lxml==5.3.0
+gunicorn==23.0.0
+pytest==8.3.3
+gradio==4.44.1
+# gradio 4.44.1 imports huggingface_hub.HfFolder/whoami, removed in newer huggingface_hub
+# releases -- pin to the last compatible version rather than leaving it unpinned.
+huggingface_hub==0.25.2
+# Left unpinned, pip resolved starlette 1.x (a newer major release than existed when
+# gradio 4.44.1 shipped), whose TemplateResponse signature broke gradio's routes.py
+# ("TypeError: unhashable type: 'dict'" from Jinja2's template cache). Pin to the
+# contemporary fastapi/starlette pair gradio 4.44.1 was actually built against.
+fastapi==0.115.6
+starlette==0.41.3
+# Runs frontend_server.py (serves the plain HTML/CSS/JS sample frontend in frontend/).
+uvicorn==0.32.0
