@@ -301,6 +301,12 @@ def ask_assistant(job_id):
             charts_path = f"{job.id}/delivery/charts.json"
             charts = json.loads(storage.resolve(charts_path).read_text()) if storage.resolve(charts_path).exists() else []
             draft_title = json.loads(storage.resolve(draft_uri).read_text()).get("title", "Financial Analysis Report")
+            if draft_uri:
+                d_obj = json.loads(storage.resolve(draft_uri).read_text())
+                if d_obj.get("data_diagnostic_section"):
+                    resolved_sections.append(d_obj["data_diagnostic_section"])
+                elif d_obj.get("data_quality_section"):
+                    resolved_sections.append(d_obj["data_quality_section"])
             html_res = render_html(job.id, draft_title, resolved_sections, charts)
             docx_uri = render_docx(job.id, draft_title, resolved_sections, charts)
             pdf_uri = render_pdf(job.id, html_res["html"])

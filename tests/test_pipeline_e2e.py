@@ -78,6 +78,8 @@ def test_full_pipeline_reaches_completed_report_with_no_unbound_numbers(app):
 
         html = storage.resolve(report.html_uri).read_text(encoding="utf-8")
         assert "Rs." in html or "%" in html  # sanity: some resolved metric actually rendered
+        assert "Data Diagnostic" in html
+        assert "Virtual CFO" in html
 
         assert storage.resolve(report.docx_uri).exists()
         assert storage.resolve(report.pdf_uri).exists()

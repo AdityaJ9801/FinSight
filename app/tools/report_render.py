@@ -252,6 +252,132 @@ _HTML_TEMPLATE = Template("""<!DOCTYPE html>
     color: #334155;
     margin: 0 0 6px 0;
   }
+  /* Data Diagnostic Styles */
+  .data-diagnostic-container {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 22px 24px;
+    margin-top: 28px;
+    margin-bottom: 24px;
+    page-break-inside: avoid;
+  }
+  .diagnostic-header {
+    border-bottom: 2px solid #0284c7;
+    padding-bottom: 10px;
+    margin-bottom: 16px;
+  }
+  .diagnostic-badge {
+    display: inline-block;
+    background: #e0f2fe;
+    color: #0369a1;
+    border: 1px solid #bae6fd;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 4px;
+    margin-bottom: 6px;
+    letter-spacing: 0.05em;
+  }
+  .diagnostic-heading {
+    font-size: 18px;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0;
+  }
+  .diagnostic-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+    margin-bottom: 16px;
+    font-size: 12.5px;
+  }
+  .diagnostic-table th {
+    background: #f1f5f9;
+    color: #334155;
+    font-weight: 700;
+    text-align: left;
+    padding: 8px 10px;
+    border: 1px solid #e2e8f0;
+  }
+  .diagnostic-table td {
+    padding: 8px 10px;
+    border: 1px solid #e2e8f0;
+    color: #334155;
+    vertical-align: top;
+  }
+  .diag-pill {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .diag-pill-pass { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
+  .diag-pill-warn { background: #fef9c3; color: #854d0e; border: 1px solid #fef08a; }
+  .diag-pill-fail { background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
+
+  .metric-diagnostic-card {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-left: 4px solid #0284c7;
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+    page-break-inside: avoid;
+  }
+  .mdiag-title-row {
+    margin-bottom: 8px;
+  }
+  .mdiag-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #0f172a;
+    display: inline-block;
+    margin-right: 8px;
+  }
+  .mdiag-badge {
+    display: inline-block;
+    background: #e2e8f0;
+    color: #334155;
+    border: 1px solid #cbd5e1;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  .mdiag-formula {
+    font-size: 11px;
+    color: #0369a1;
+    background: #f0f9ff;
+    padding: 4px 8px;
+    border-radius: 4px;
+    margin-top: 5px;
+    font-family: monospace;
+    display: inline-block;
+  }
+  .mdiag-step-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #1e293b;
+    margin-top: 8px;
+    margin-bottom: 3px;
+  }
+  .mdiag-text {
+    font-size: 12.5px;
+    color: #475569;
+    line-height: 1.5;
+    margin: 0;
+  }
+  .mdiag-bullets {
+    margin: 3px 0 8px 18px;
+    padding: 0;
+    font-size: 12px;
+    color: #475569;
+    line-height: 1.55;
+  }
   /* Interleaved Charts */
   .chart-container {
     margin: 14px 0 18px 0;
@@ -359,6 +485,126 @@ _HTML_TEMPLATE = Template("""<!DOCTYPE html>
         <div class="warning-heading">{{ section.heading }}</div>
         <p class="warning-body">{{ section.body }}</p>
       </div>
+    {% elif section.kind == "data_diagnostic" or "Data Diagnostic" in section.heading %}
+      <div class="data-diagnostic-container">
+        <div class="diagnostic-header">
+          <span class="diagnostic-badge">🔬 Virtual CFO Data Diagnostic</span>
+          <h2 class="diagnostic-heading">{{ section.heading }}</h2>
+        </div>
+
+        {% if section.integrity_summary %}
+        <div style="margin-bottom: 16px;">
+          <div style="font-size: 13px; font-weight: 700; color: #1e293b; margin-bottom: 6px;">1. Dataset Ingestion & Ledger Integrity Audit</div>
+          <table class="diagnostic-table">
+            <tr>
+              <th style="width: 25%;">Financial Facts</th>
+              <td style="width: 25%;">{{ section.integrity_summary.facts_count }} line items</td>
+              <th style="width: 25%;">Reconciliation Status</th>
+              <td style="width: 25%;">
+                <span class="diag-pill diag-pill-{{ section.integrity_summary.recon_badge_class }}">
+                  {{ section.integrity_summary.reconciliation_status }}
+                </span>
+              </td>
+            </tr>
+            <tr>
+              <th>Reporting Periods</th>
+              <td>{{ section.integrity_summary.periods_str }}</td>
+              <th>Mapping Confidence</th>
+              <td>{{ section.integrity_summary.mapping_confidence_pct }}%</td>
+            </tr>
+            {% if section.integrity_summary.statements_covered %}
+            <tr>
+              <th>Statements Covered</th>
+              <td colspan="3">{{ section.integrity_summary.statements_covered|join(", ") }}</td>
+            </tr>
+            {% endif %}
+          </table>
+
+          {% if section.integrity_summary.checks %}
+          <div style="font-size: 12px; font-weight: 700; color: #475569; margin: 8px 0 4px 0;">Statement Reconciliation Checks:</div>
+          <table class="diagnostic-table">
+            <tr>
+              <th>Reconciliation Check</th>
+              <th style="width: 15%; text-align: center;">Status</th>
+              <th style="width: 25%; text-align: right;">Variance / Delta</th>
+            </tr>
+            {% for chk in section.integrity_summary.checks %}
+            <tr>
+              <td>{{ chk.label }}</td>
+              <td style="text-align: center;">
+                <span class="diag-pill diag-pill-{{ chk.status }}">{{ chk.status_text }}</span>
+              </td>
+              <td style="text-align: right;">
+                {% if chk.diff == 0 %}
+                  <span style="color: #15803d; font-weight: 600;">₹0.00 (Exact Match)</span>
+                {% else %}
+                  <span style="color: #b91c1c;">₹{{ "%.2f"|format(chk.diff) }}</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </table>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {% if section.metric_diagnostics %}
+        <div>
+          <div style="font-size: 13px; font-weight: 700; color: #1e293b; margin-bottom: 6px;">2. Virtual CFO Root-Cause Metric Diagnostics (Flowchart Compendium)</div>
+          <p style="font-size: 12px; color: #64748b; margin-top: 0; margin-bottom: 12px;">
+            Automated 6-level reverse-flow drill-down answering <em>What changed? Why did it change? What caused it? What to investigate? What to ask management?</em>
+          </p>
+
+          {% for mdiag in section.metric_diagnostics %}
+          <div class="metric-diagnostic-card">
+            <div class="mdiag-title-row">
+              <span class="mdiag-title">{{ mdiag.canonical_name }}</span>
+              <span class="mdiag-badge">{{ mdiag.direction_badge }}</span>
+              <div><span class="mdiag-formula">Formula: {{ mdiag.formula }}</span></div>
+            </div>
+            
+            <div class="mdiag-step-title">1. What Changed:</div>
+            <p class="mdiag-text">{{ mdiag.what_changed }}</p>
+
+            <div class="mdiag-step-title">2. Why Did It Change (Governing Components):</div>
+            <ul class="mdiag-bullets">
+              {% for comp in mdiag.why_did_it_change %}
+                <li><strong>{{ comp }}</strong></li>
+              {% endfor %}
+            </ul>
+
+            <div class="mdiag-step-title">3. Operational Root Causes:</div>
+            <ul class="mdiag-bullets">
+              {% for rc in mdiag.root_causes %}
+                <li><strong>{{ rc.name }}</strong> (<em>{{ rc.component }}</em>): {{ rc.root_cause }}</li>
+              {% endfor %}
+            </ul>
+
+            <div class="mdiag-step-title">4. Operational Audit Checklist (What to Investigate):</div>
+            <ul class="mdiag-bullets">
+              {% for inv in mdiag.investigations %}
+                <li>☐ {{ inv }}</li>
+              {% endfor %}
+            </ul>
+
+            <div class="mdiag-step-title">5. High-Impact Questions for Management:</div>
+            <ul class="mdiag-bullets">
+              {% for q in mdiag.questions %}
+                <li>❓ {{ q }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if section.integrity_summary and section.integrity_summary.notes %}
+        <div style="margin-top: 14px; padding: 10px 14px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px;">
+          <div style="font-size: 12px; font-weight: 700; color: #334155; margin-bottom: 4px;">3. Data Quality & Methodology Notes</div>
+          <p style="margin: 0; font-size: 12px; color: #475569; line-height: 1.5;">{{ section.integrity_summary.notes }}</p>
+        </div>
+        {% endif %}
+      </div>
     {% elif section.kind == "data_quality" or "Data Quality" in section.heading %}
       <div class="data-quality-block">
         <div class="data-quality-heading">{{ section.heading }}</div>
@@ -461,6 +707,16 @@ def render_html(
     metadata: dict | None = None,
 ) -> dict:
     charts = charts or []
+    has_diagnostic = any(s.get("kind") == "data_diagnostic" or "Data Diagnostic" in s.get("heading", "") for s in sections)
+    if not has_diagnostic:
+        draft_path = f"{job_id}/delivery/draft.json"
+        if storage.resolve(draft_path).exists():
+            try:
+                draft_data = json.loads(storage.resolve(draft_path).read_text())
+                if draft_data.get("data_diagnostic_section"):
+                    sections = list(sections) + [draft_data["data_diagnostic_section"]]
+            except Exception:
+                pass
     enriched_sections, unassigned = interleave_charts_into_sections(sections, charts)
     health_score, kpi_cards = _extract_kpis(job_id, metadata)
     is_verified = not any("Not Verified" in s.get("heading", "") for s in sections)
@@ -491,6 +747,16 @@ def render_docx(
     from docx.enum.table import WD_TABLE_ALIGNMENT
 
     charts = charts or []
+    has_diagnostic = any(s.get("kind") == "data_diagnostic" or "Data Diagnostic" in s.get("heading", "") for s in sections)
+    if not has_diagnostic:
+        draft_path = f"{job_id}/delivery/draft.json"
+        if storage.resolve(draft_path).exists():
+            try:
+                draft_data = json.loads(storage.resolve(draft_path).read_text())
+                if draft_data.get("data_diagnostic_section"):
+                    sections = list(sections) + [draft_data["data_diagnostic_section"]]
+            except Exception:
+                pass
     enriched_sections, unassigned = interleave_charts_into_sections(sections, charts)
     health_score, kpi_cards = _extract_kpis(job_id)
 
@@ -533,6 +799,57 @@ def render_docx(
 
     # Sections with Interleaved Charts
     for section in enriched_sections:
+        if section.get("kind") == "data_diagnostic" or "Data Diagnostic" in section.get("heading", ""):
+            doc.add_heading(section["heading"], level=2)
+            int_sum = section.get("integrity_summary")
+            if int_sum:
+                doc.add_heading("1. Dataset Ingestion & Ledger Integrity Audit", level=3)
+                p = doc.add_paragraph()
+                p.add_run(f"Financial Facts Ingested: {int_sum.get('facts_count')} line items across {', '.join(int_sum.get('statements_covered', []))}\n")
+                p.add_run(f"Reporting Periods: {int_sum.get('periods_str')}\n")
+                p.add_run(f"Reconciliation Status: {int_sum.get('reconciliation_status')}\n")
+                p.add_run(f"CoA Mapping Confidence: {int_sum.get('mapping_confidence_pct')}%\n")
+                if int_sum.get("checks"):
+                    chk_table = doc.add_table(rows=len(int_sum["checks"]) + 1, cols=3)
+                    chk_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+                    h_cells = chk_table.rows[0].cells
+                    h_cells[0].text = "Reconciliation Check"
+                    h_cells[1].text = "Status"
+                    h_cells[2].text = "Variance"
+                    for idx, chk in enumerate(int_sum["checks"]):
+                        r_cells = chk_table.rows[idx + 1].cells
+                        r_cells[0].text = chk["label"]
+                        r_cells[1].text = chk["status_text"]
+                        r_cells[2].text = f"Rs.{chk['diff']:,.2f}" if chk["diff"] != 0 else "Exact Match"
+                    doc.add_paragraph()
+
+            mdiags = section.get("metric_diagnostics")
+            if mdiags:
+                doc.add_heading("2. Virtual CFO Root-Cause Metric Diagnostics", level=3)
+                for mdiag in mdiags:
+                    doc.add_heading(f"{mdiag['canonical_name']} ({mdiag['direction_badge']})", level=4)
+                    fp = doc.add_paragraph()
+                    f_run = fp.add_run(f"Formula: {mdiag['formula']}")
+                    f_run.font.italic = True
+                    f_run.font.size = Pt(9.5)
+                    doc.add_paragraph(f"1. What Changed: {mdiag['what_changed']}")
+                    doc.add_paragraph("2. Governing Components: " + ", ".join(mdiag["why_did_it_change"]))
+                    doc.add_paragraph("3. Operational Root Causes:")
+                    for rc in mdiag["root_causes"]:
+                        doc.add_paragraph(f"* {rc['name']} ({rc['component']}): {rc['root_cause']}")
+                    doc.add_paragraph("4. Operational Audit Checklist (What to Investigate):")
+                    for inv in mdiag["investigations"]:
+                        doc.add_paragraph(f"* [ ] {inv}")
+                    doc.add_paragraph("5. Questions for Management:")
+                    for q in mdiag["questions"]:
+                        doc.add_paragraph(f"* {q}")
+                    doc.add_paragraph()
+
+            if int_sum and int_sum.get("notes"):
+                doc.add_heading("3. Data Quality & Methodology Notes", level=3)
+                doc.add_paragraph(int_sum["notes"])
+            continue
+
         doc.add_heading(section["heading"], level=2)
         doc.add_paragraph(section["body"])
 

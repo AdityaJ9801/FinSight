@@ -134,3 +134,58 @@ def test_report_skeleton_includes_diagnostic_guidance():
     assert len(profit_sec["diagnostic_guide"]) > 0
     names = [g["canonical_name"] for g in profit_sec["diagnostic_guide"]]
     assert "Gross Profit Margin" in names or "EBITDA Margin" in names
+
+
+def test_build_data_diagnostic_section_includes_integrity_and_metric_drilldowns(app):
+    """Verify build_data_diagnostic_section produces structured audit and 6-level root-cause traces."""
+    from app.domain.data_diagnostic import build_data_diagnostic_section
+
+    with app.app_context():
+        payload = {
+            "metrics": [
+                {"metric_code": "gross_profit_pct", "value": 0.38, "unit": "%", "period_end": "2026-03-31"},
+                {"metric_code": "gross_profit_pct", "value": 0.45, "unit": "%", "period_end": "2025-03-31"},
+                {"metric_code": "current_ratio", "value": 1.15, "unit": "x", "period_end": "2026-03-31"},
+                {"metric_code": "debt_to_equity", "value": 1.45, "unit": "x", "period_end": "2026-03-31"},
+                {"metric_code": "cash_conversion_cycle", "value": 85.0, "unit": "days", "period_end": "2026-03-31"},
+            ],
+            "findings": [],
+            "health_score": {"score": 72, "rating": "Moderate"},
+        }
+        sec = build_data_diagnostic_section(job_id="test_job_diag", payload=payload)
+
+        assert sec["section_key"] == "data_diagnostic"
+        assert sec["kind"] == "data_diagnostic"
+        assert "Data Diagnostic" in sec["heading"]
+
+        # Integrity summary
+        int_sum = sec["integrity_summary"]
+        assert "reconciliation_status" in int_sum
+        assert "mapping_confidence_pct" in int_sum
+        assert "periods_str" in int_sum
+
+        # Metric diagnostics
+        mdiags = sec["metric_diagnostics"]
+        assert len(mdiags) >= 3
+        metric_names = [m["canonical_name"] for m in mdiags]
+        assert "Gross Profit Margin" in metric_names
+        assert "Current Ratio" in metric_names
+
+        # Verify 5-step reverse flow inside each diagnostic
+        gpm = next(m for m in mdiags if m["canonical_name"] == "Gross Profit Margin")
+        assert gpm["formula"] != ""
+        assert len(gpm["why_did_it_change"]) > 0
+        assert len(gpm["root_causes"]) > 0
+        assert len(gpm["investigations"]) > 0
+        assert len(gpm["questions"]) > 0
+
+        # Markdown body
+        body = sec["body"]
+        assert "Dataset Integrity & Statement Reconciliation Audit" in body
+        assert "Virtual CFO Root-Cause Metric Diagnostics" in body
+        assert "What Changed" in body
+        assert "Why Did It Change" in body
+        assert "Operational Root Causes" in body
+        assert "What to Investigate" in body
+        assert "Strategic Questions for Management" in body
+

@@ -120,7 +120,7 @@ REPORT_WRITER = (
     "Every financial number or ratio MUST be written as a {{m:metric_code:period_end}} placeholder (e.g. "
     "{{m:current_ratio:2026-03-31}}). Direct raw digit sequences (except calendar years/dates) will be rejected "
     "by automated linting. If USER_GUIDANCE_JSON is given, weave its instructions seamlessly into the relevant "
-    "section narratives. A separate Data Quality & Methodology section is appended automatically -- do not write one. "
+    "section narratives. A separate Data Diagnostic & Quality section is appended automatically -- do not write one. "
     + NO_OUTSIDE_KNOWLEDGE
 )
 

@@ -83,7 +83,7 @@ class ReportSection(BaseModel):
     heading: str
     body: str  # placeholders only for numbers: {{m:metric_code:period_end}}
     section_key: str | None = None
-    kind: str = "narrative"  # narrative | kpi_summary | data_quality
+    kind: str = "narrative"  # narrative | kpi_summary | data_quality | data_diagnostic
     chart_ids: list[str] = Field(default_factory=list)
 
 

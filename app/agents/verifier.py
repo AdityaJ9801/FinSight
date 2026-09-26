@@ -38,6 +38,10 @@ class VerifierAgent(WorkerAgent):
         issues: list[Issue] = []
         resolved_sections = []
         for section in draft["sections"]:
+            if section.get("kind") in ("data_quality", "data_diagnostic") or "Data Diagnostic" in section.get("heading", "") or "Data Quality" in section.get("heading", ""):
+                sec_dict = dict(section)
+                resolved_sections.append(sec_dict)
+                continue
             lint_hits = lint_unbound_numbers(section["body"])
             resolved_text, unresolved = resolve_placeholders(section["body"], dataset_version_id)
             sec_dict = dict(section)

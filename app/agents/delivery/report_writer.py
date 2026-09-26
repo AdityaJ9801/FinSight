@@ -106,6 +106,16 @@ class ReportWriterAgent(WorkerAgent):
             dq["kind"] = "data_quality"
             dq["chart_ids"] = []
         draft_dict["data_quality_section"] = dq
+
+        from app.domain.data_diagnostic import build_data_diagnostic_section
+
+        dataset_version_id = spec.params.get("dataset_version_id")
+        diag_sec = build_data_diagnostic_section(
+            job_id=spec.job_id,
+            dataset_version_id=dataset_version_id,
+            payload=payload,
+        )
+        draft_dict["data_diagnostic_section"] = diag_sec
         draft_dict["skeleton"] = skeleton
 
         uri = storage.write_text(f"{spec.job_id}/delivery/draft.json", json.dumps(draft_dict))

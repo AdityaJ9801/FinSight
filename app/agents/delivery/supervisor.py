@@ -161,6 +161,12 @@ class DeliverySupervisor:
                 if draft_uri:
                     draft_title = json.loads(storage.resolve(draft_uri).read_text()).get("title", draft_title)
                 all_sections = [warning_section] + resolved_sections
+                if draft_uri:
+                    draft_obj = json.loads(storage.resolve(draft_uri).read_text())
+                    if draft_obj.get("data_diagnostic_section"):
+                        all_sections = all_sections + [draft_obj["data_diagnostic_section"]]
+                    elif draft_obj.get("data_quality_section"):
+                        all_sections = all_sections + [draft_obj["data_quality_section"]]
                 interleaved_sections, _ = interleave_charts_into_sections(all_sections, charts)
                 html_result = render_html(job.id, draft_title, interleaved_sections, charts)
                 docx_uri = render_docx(job.id, draft_title, interleaved_sections, charts)
@@ -180,7 +186,9 @@ class DeliverySupervisor:
         draft = json.loads(storage.resolve(draft_uri).read_text())
         # Appended after verification, not part of the LLM-authored/verified draft -- see
         # ReportWriterAgent._data_quality_section's docstring for why.
-        if draft.get("data_quality_section"):
+        if draft.get("data_diagnostic_section"):
+            resolved_sections = resolved_sections + [draft["data_diagnostic_section"]]
+        elif draft.get("data_quality_section"):
             resolved_sections = resolved_sections + [draft["data_quality_section"]]
         interleaved_sections, _ = interleave_charts_into_sections(resolved_sections, charts)
         html_result = render_html(job.id, draft["title"], interleaved_sections, charts)
