@@ -14,6 +14,6 @@ from app.tools import (  # noqa: F401
     vector_search,
     web_search,
 )
-from app.tools.calc import health_score, metrics  # noqa: F401
+from app.tools.calc import detailed_analysis, health_score, metrics  # noqa: F401
 from app.tools.ml import anomaly, forecast, risk  # noqa: F401
 from app.tools.parsers import csv_tool, excel, fingerprint, ocr, pdf  # noqa: F401

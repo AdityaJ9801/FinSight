@@ -23,6 +23,7 @@ const AGENT_META = {
   chart_spec: { icon: "📈", label: "Chart Builder", desc: "rendering visualizations" },
   report_writer: { icon: "✍️", label: "Report Writer", desc: "drafting the report" },
   verifier: { icon: "🔍", label: "Verifier", desc: "checking claims against the data" },
+  detailed_analytics: { icon: "🧮", label: "Detailed Analytics", desc: "statement, DuPont and bridge analysis" },
   orchestrator: { icon: "🧭", label: "Orchestrator", desc: "relaying your note to the relevant agent(s)" },
 };
 
@@ -263,9 +264,24 @@ async function renderNewTasks(jobId) {
   if (appended) scrollStreamToBottom();
 }
 
+// Stage of each agent, filled from the backend's agent registry (GET /api/agents) so a new
+// agent shows up in the right place without editing this file. AGENT_META above and the
+// lists below are the fallback while the API isn't reachable yet.
+const AGENT_STAGE = {};
+
+async function loadAgentRegistry() {
+  const { ok, body } = await apiGet("/agents");
+  if (!ok || !Array.isArray(body)) return;
+  for (const a of body) {
+    AGENT_META[a.name] = { icon: a.icon, label: a.label, desc: a.description };
+    if (["data", "analysis", "delivery"].includes(a.stage)) AGENT_STAGE[a.name] = a.stage;
+  }
+}
+
 function agentToStage(agent) {
+  if (AGENT_STAGE[agent]) return AGENT_STAGE[agent];
   if (["intake_classifier", "extractor", "schema_mapper", "reconciler"].includes(agent)) return "data";
-  if (["ratio", "cash_wc", "forecast", "risk", "gst"].includes(agent)) return "analysis";
+  if (["ratio", "cash_wc", "forecast", "risk", "gst", "detailed_analytics"].includes(agent)) return "analysis";
   if (["insight_reasoner", "chart_spec", "report_writer", "verifier"].includes(agent)) return "delivery";
   return null;
 }
@@ -497,6 +513,9 @@ function resetStudio() {
   document.getElementById("charts-gallery").innerHTML = "";
   document.querySelector("#metrics-table tbody").innerHTML = "";
   document.querySelector("#findings-table tbody").innerHTML = "";
+  document.getElementById("analysis-empty").classList.remove("hidden");
+  document.getElementById("analysis-preview").classList.add("hidden");
+  document.getElementById("analysis-preview").innerHTML = "";
 }
 
 async function loadStudio(jobId) {
@@ -523,12 +542,15 @@ async function loadStudio(jobId) {
       <div class="chart-card">
         <img src="${c.png_base64}" alt="${escapeHtml(c.title)}">
         <div class="chart-title">${escapeHtml(c.title)}</div>
-        ${c.caption ? `<div class="chart-caption">${escapeHtml(c.caption)}</div>` : ""}
+        ${c.takeaway ? `<div class="chart-takeaway">${escapeHtml(c.takeaway)}</div>` : ""}
+        ${c.caption && c.caption !== c.takeaway ? `<div class="chart-caption">${escapeHtml(c.caption)}</div>` : ""}
       </div>`).join("");
   } else {
     document.getElementById("charts-empty").classList.remove("hidden");
     galleryEl.innerHTML = "";
   }
+
+  await loadAnalysisPreview(jobId);
 
   const reportResp = await fetch(`${API_BASE}/jobs/${jobId}/report?format=html`);
   if (reportResp.ok) {
@@ -653,7 +675,7 @@ async function runAssistant(jobId, entry, payload) {
   // run, instead of just leaving it as plain chat text.
   if (body.agent_used) {
     await renderNewTasks(jobId);
-    if (body.agent_used === "report_writer") {
+    if (["report_writer", "chart_spec", "detailed_analytics"].includes(body.agent_used)) {
       await loadStudio(jobId);
     }
   }
@@ -748,8 +770,56 @@ async function saveLlmSettings() {
 document.getElementById("llm-refresh-btn").addEventListener("click", refreshLlmStatus);
 document.getElementById("llm-save-btn").addEventListener("click", saveLlmSettings);
 
+// ---------- detailed analysis preview ----------
+
+async function loadAnalysisPreview(jobId) {
+  const { ok, body } = await apiGet(`/jobs/${jobId}/analysis`);
+  if (!ok) return;
+  document.getElementById("analysis-empty").classList.add("hidden");
+  document.getElementById("analysis-preview").classList.remove("hidden");
+  renderAnalysisPreview(body);
+}
+
+function fmtPct(v) { return v === null || v === undefined ? "—" : (v * 100).toFixed(1) + "%"; }
+function fmtAmt(v) { return v === null || v === undefined ? "—" : Math.round(v).toLocaleString("en-IN"); }
+
+function renderAnalysisPreview(a) {
+  const parts = [];
+  const bridge = a.profit_bridge;
+  if (bridge) {
+    const rows = bridge.steps.map((s) => `<tr><td>${escapeHtml(s.label)}</td>` +
+      `<td class="num">${s.kind === "delta" && s.amount > 0 ? "+" : ""}${fmtAmt(s.amount)}</td></tr>`).join("");
+    parts.push(`<div class="analysis-sub">Profit bridge ${escapeHtml(bridge.from_period)} → ${escapeHtml(bridge.to_period)}</div>` +
+      `<table><tbody>${rows}</tbody></table>`);
+  }
+  if ((a.dupont || []).length) {
+    const rows = a.dupont.map((d) => `<tr><td>${escapeHtml(d.period)}</td><td class="num">${fmtPct(d.net_margin)}</td>` +
+      `<td class="num">${d.asset_turnover.toFixed(2)}x</td><td class="num">${d.equity_multiplier.toFixed(2)}x</td>` +
+      `<td class="num">${fmtPct(d.roe)}</td></tr>`).join("");
+    parts.push(`<div class="analysis-sub">DuPont ROE</div><table><thead><tr><th>Period</th><th>Margin</th><th>Turnover</th>` +
+      `<th>Leverage</th><th>ROE</th></tr></thead><tbody>${rows}</tbody></table>`);
+  }
+  if ((a.growth || []).length) {
+    const rows = a.growth.map((g) => `<tr><td>${escapeHtml(g.label)}</td><td class="num">${fmtPct(g.cagr)}</td></tr>`).join("");
+    parts.push(`<div class="analysis-sub">Growth (CAGR)</div><table><tbody>${rows}</tbody></table>`);
+  }
+  const bank = (a.bank || {}).totals;
+  if (bank) {
+    parts.push(`<div class="analysis-sub">Bank flows (${bank.months} months)</div><table><tbody>` +
+      `<tr><td>Inflows</td><td class="num">${fmtAmt(bank.inflow)}</td></tr>` +
+      `<tr><td>Outflows</td><td class="num">${fmtAmt(bank.outflow)}</td></tr>` +
+      `<tr><td>Net</td><td class="num">${fmtAmt(bank.net)}</td></tr></tbody></table>`);
+  }
+  document.getElementById("analysis-preview").innerHTML = parts.join("") || `<div class="hint">No detailed analysis.</div>`;
+}
+
 // ---------- init ----------
 
 renderSessions();
 refreshLlmStatus();
 updateChatHint();
+// Deep link: http://localhost:8080/#job_<id> opens that job directly.
+loadAgentRegistry().then(() => {
+  const hashJob = decodeURIComponent(location.hash.slice(1));
+  if (/^job_[0-9a-f]{32}$/.test(hashJob)) openJob(hashJob);
+});

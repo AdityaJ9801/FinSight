@@ -22,13 +22,13 @@ from app.models.metric import Metric
 from app.models.report import Report
 from app.models.review import ReviewItem
 from app.models.validation import ValidationResult
-from app.agents.delivery.chart_spec import ChartSpecAgent
-from app.agents.delivery.insight import InsightReasonerAgent
-from app.agents.delivery.report_writer import ReportWriterAgent
+from app.agents import registry as agent_registry
+from app.agents.delivery.publishing import publish_report, resolve_draft_sections
 from app.agents.verifier import VerifierAgent
-from app.orchestrator.orchestrator import QueueUnavailableError, STAGE_AGENT_DESCRIPTIONS, create_job, start
-from app.orchestrator.templates import modules_for
-from app.tools.report_render import render_docx, render_html, render_pdf, resolve_placeholders
+from app.orchestrator import blackboard
+from app.orchestrator.orchestrator import QueueUnavailableError, create_job, start
+from app.orchestrator.templates import module_names_for
+from app.tools.report_render import resolve_placeholders
 from app.utils import storage
 from app.utils.ids import new_id
 
@@ -223,19 +223,13 @@ def ask_assistant(job_id):
     if not message and not chosen_agent:
         return jsonify(error="message is required"), 400
 
-    analysis_classes = {cls.name: cls for cls in modules_for(job.plan_template)}
-    delivery_classes = {
-        "insight_reasoner": InsightReasonerAgent,
-        "report_writer": ReportWriterAgent,
-        "chart_spec": ChartSpecAgent,
-    }
-    agent_classes = {**analysis_classes, **delivery_classes}
-
-    # Analysis agents ordered first (preserves default test selection), followed by delivery agents
-    agent_descriptions = {k: v for k, v in STAGE_AGENT_DESCRIPTIONS.get("analysis", {}).items() if k in analysis_classes}
-    for k, v in STAGE_AGENT_DESCRIPTIONS.get("delivery", {}).items():
-        if k in agent_classes and k not in agent_descriptions:
-            agent_descriptions[k] = v
+    # Re-runnable agents come from the agent registry: this job's active analysis modules
+    # first (plan-template order), then the delivery agents that can be re-run on demand.
+    active_modules = set(module_names_for(job.plan_template))
+    candidates = [a for a in agent_registry.rerunnable("analysis") if a.name in active_modules]
+    candidates += agent_registry.rerunnable("delivery")
+    agent_classes = {a.name: a.load() for a in candidates}
+    agent_descriptions = {a.name: a.description for a in candidates}
 
     llm = get_llm_gateway()
 
@@ -268,7 +262,7 @@ def ask_assistant(job_id):
         return jsonify(error=f"'{chosen_agent}' isn't an active module for this job"), 400
 
     agent_cls = agent_classes[chosen_agent]
-    insights_uri = f"{job.id}/delivery/insights.json"
+    insights_uri = blackboard.uri(job.id, "insights")
     params = {"dataset_version_id": job.dataset_version_id, "user_guidance": action_note}
     if chosen_agent in ("report_writer", "chart_spec"):
         params["insights_uri"] = insights_uri
@@ -279,54 +273,38 @@ def ask_assistant(job_id):
         params=params,
     )
     # WorkerAgent.run() already records its own TaskRun (see agents/base.py), so this run
-    # shows up in GET /api/jobs/<id>/tasks the same as any pipeline-triggered agent call --
-    # no separate bookkeeping needed here.
+    # shows up in GET /api/jobs/<id>/tasks the same as any pipeline-triggered agent call.
     result = agent_cls(llm).run(spec)
 
-    # If the report writer was re-run, verify the new draft and refresh the Report record
-    if chosen_agent == "report_writer" and result.outputs:
-        draft_uri = result.outputs[0].uri
+    # Agents whose output feeds the rendered report: re-verify (for a new draft) and
+    # re-render through the same publish path the pipeline uses, so the report reflects
+    # the re-run instead of silently going stale.
+    if chosen_agent in ("report_writer", "chart_spec", "detailed_analytics") and result.outputs:
         try:
-            verifier_result = VerifierAgent(llm).run(TaskSpec(
-                task_id=new_id("t_"), job_id=job.id, tenant_id=job.tenant_id, agent="verifier",
-                goal=f"verify chat-updated report for job {job.id}",
-                params={"dataset_version_id": job.dataset_version_id, "draft_uri": draft_uri, "insights_uri": insights_uri},
-            ))
-            resolved_sections = verifier_result.usage.get("resolved_sections") or []
-            if not resolved_sections and draft_uri:
-                fallback_draft = json.loads(storage.resolve(draft_uri).read_text())
-                for s in fallback_draft.get("sections", []):
-                    res_body, _ = resolve_placeholders(s["body"], job.dataset_version_id)
-                    resolved_sections.append({**s, "body": res_body})
-            charts_path = f"{job.id}/delivery/charts.json"
-            charts = json.loads(storage.resolve(charts_path).read_text()) if storage.resolve(charts_path).exists() else []
-            draft_title = json.loads(storage.resolve(draft_uri).read_text()).get("title", "Financial Analysis Report")
-            if draft_uri:
-                d_obj = json.loads(storage.resolve(draft_uri).read_text())
-                if d_obj.get("data_diagnostic_section"):
-                    resolved_sections.append(d_obj["data_diagnostic_section"])
-                elif d_obj.get("data_quality_section"):
-                    resolved_sections.append(d_obj["data_quality_section"])
-            html_res = render_html(job.id, draft_title, resolved_sections, charts)
-            docx_uri = render_docx(job.id, draft_title, resolved_sections, charts)
-            pdf_uri = render_pdf(job.id, html_res["html"])
-            report = Report.query.filter_by(dataset_version=job.dataset_version_id).order_by(Report.created_at.desc()).first()
-            if report is None:
-                report = Report(id=new_id("rep_"), dataset_version=job.dataset_version_id, template=job.plan_template)
-                db.session.add(report)
-            report.draft_uri = draft_uri
-            report.html_uri = html_res["html_uri"]
-            report.docx_uri = docx_uri
-            report.pdf_uri = pdf_uri
-            report.verifier_status = "pass" if verifier_result.status.value == "done" else "failed"
-            report.revision = (report.revision or 0) + 1
-            db.session.commit()
-        except Exception as exc:
-            import traceback
-            traceback.print_exc()
+            _refresh_report(job, llm, new_draft_uri=result.outputs[0].uri if chosen_agent == "report_writer" else None)
+        except Exception:  # noqa: BLE001 -- the re-run itself succeeded; report refresh is best-effort
+            current_app.logger.exception("report refresh after chat re-run failed")
 
     resolved_summary, _ = resolve_placeholders(result.summary, job.dataset_version_id)
     return jsonify(type="answer", answer=resolved_summary, agent_used=chosen_agent, status=result.status.value)
+
+
+def _refresh_report(job: Job, llm, new_draft_uri: str | None) -> None:
+    report = Report.query.filter_by(dataset_version=job.dataset_version_id).order_by(Report.created_at.desc()).first()
+    draft_uri = new_draft_uri or (report.draft_uri if report else None)
+    if draft_uri is None:
+        return
+    verifier_result = VerifierAgent(llm).run(TaskSpec(
+        task_id=new_id("t_"), job_id=job.id, tenant_id=job.tenant_id, agent="verifier",
+        goal=f"verify chat-updated report for job {job.id}",
+        params={"dataset_version_id": job.dataset_version_id, "draft_uri": draft_uri,
+                "insights_uri": blackboard.uri(job.id, "insights")},
+    ))
+    verified = verifier_result.status.value == "done"
+    sections = verifier_result.usage.get("resolved_sections") or         resolve_draft_sections(blackboard.read(job.id, "draft") or {}, job.dataset_version_id)
+    report = publish_report(job, job.dataset_version_id, sections, verified=verified, draft_uri=draft_uri, report=report)
+    report.revision = (report.revision or 0) + 1
+    db.session.commit()
 
 
 def _get_scoped_job(job_id: str) -> Job | None:

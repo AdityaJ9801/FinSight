@@ -66,8 +66,19 @@ def debt_to_equity(f):
     return safe_div(debt, f["BS.EQ.TOTAL"])
 
 
+def operating_expenses(f) -> float:
+    """Expenses before depreciation and finance costs. Uses the statement's own total
+    expenses when reported (so no expense caption is missed); otherwise every expense line,
+    including purchases of stock-in-trade and changes in inventories, net of expenditure
+    transferred to capital -- EBITDA previously ignored those three and overstated profit."""
+    if "PL.TOTAL_EXPENSES" in f:
+        return f["PL.TOTAL_EXPENSES"] - f.get("PL.DEPRECIATION", 0.0) - f.get("PL.FINANCE_COST", 0.0)
+    return (f["PL.COGS"] + f.get("PL.PURCHASES_STOCK_IN_TRADE", 0.0) + f.get("PL.CHANGES_IN_INVENTORY", 0.0)
+            + f["PL.EMPLOYEE_COST"] + f["PL.OTHER_EXPENSES"] - f.get("PL.EXPENSES_CAPITALISED", 0.0))
+
+
 def _ebitda(f) -> float:
-    return f["PL.REVENUE"] + f["PL.OTHER_INCOME"] - f["PL.COGS"] - f["PL.EMPLOYEE_COST"] - f["PL.OTHER_EXPENSES"]
+    return f["PL.REVENUE"] + f["PL.OTHER_INCOME"] - operating_expenses(f)
 
 
 @metric("ebitda", "1.0", "INR",
@@ -97,7 +108,9 @@ def dscr(f):
 
 @metric("gross_profit_pct", "1.0", "%", ["PL.REVENUE", "PL.COGS"], "ratio")
 def gross_profit_pct(f):
-    return safe_div(f["PL.REVENUE"] - f["PL.COGS"], f["PL.REVENUE"])
+    # cost of goods sold = materials consumed + purchases of stock-in-trade + change in inventories
+    cogs = f["PL.COGS"] + f.get("PL.PURCHASES_STOCK_IN_TRADE", 0.0) + f.get("PL.CHANGES_IN_INVENTORY", 0.0)
+    return safe_div(f["PL.REVENUE"] - cogs, f["PL.REVENUE"])
 
 
 @metric("ebitda_margin", "1.0", "%",
@@ -179,11 +192,81 @@ def ocf_to_pat(f):
     return safe_div(f["CF.OPERATING"], f["PL.PAT"])
 
 
-@metric("free_cash_flow", "1.0", "INR", ["CF.OPERATING", "CF.INVESTING"], "cash_wc")
+@metric("free_cash_flow", "2.0", "INR", ["CF.OPERATING", "CF.CAPEX"], "cash_wc")
 def free_cash_flow(f):
-    # Approximation: operating cash flow net of investing outflow, in the absence of a
-    # dedicated capex line item in the canonical CoA.
+    # Standard FCF: operating cash flow less capital expenditure. v1.0 was OCF + total
+    # investing cash flow, which treated purchases of subsidiaries / financial investments
+    # as capex (a real filing showed FCF of -10,726 crore where OCF - capex was +12,400).
+    # Capex is presented as an outflow (negative); abs() accepts either presentation.
+    return f["CF.OPERATING"] - abs(f["CF.CAPEX"])
+
+
+@metric("net_cash_after_investing", "1.0", "INR", ["CF.OPERATING", "CF.INVESTING"], "cash_wc")
+def net_cash_after_investing(f):
+    # Post-investment net cash flow: OCF + ALL investing cash flows (incl. acquisitions and
+    # financial investments). Kept, under its own name, because lenders do look at it --
+    # it is not free cash flow and must not be labelled as such.
     return f["CF.OPERATING"] + f["CF.INVESTING"]
+
+
+# --- Detailed statement analysis (detailed_analytics group) ---
+
+@metric("ebit", "1.0", "INR",
+        ["PL.REVENUE", "PL.OTHER_INCOME", "PL.COGS", "PL.EMPLOYEE_COST", "PL.OTHER_EXPENSES", "PL.DEPRECIATION"],
+        "detailed_analytics")
+def ebit(f):
+    return _ebitda(f) - f["PL.DEPRECIATION"]
+
+
+@metric("equity_multiplier", "1.0", "x", ["BS.TOTAL_ASSETS", "BS.EQ.TOTAL"], "detailed_analytics")
+def equity_multiplier(f):
+    return safe_div(f["BS.TOTAL_ASSETS"], f["BS.EQ.TOTAL"])
+
+
+@metric("cogs_to_revenue", "1.0", "%", ["PL.COGS", "PL.REVENUE"], "detailed_analytics")
+def cogs_to_revenue(f):
+    return safe_div(f["PL.COGS"], f["PL.REVENUE"])
+
+
+@metric("employee_cost_to_revenue", "1.0", "%", ["PL.EMPLOYEE_COST", "PL.REVENUE"], "detailed_analytics")
+def employee_cost_to_revenue(f):
+    return safe_div(f["PL.EMPLOYEE_COST"], f["PL.REVENUE"])
+
+
+@metric("other_expenses_to_revenue", "1.0", "%", ["PL.OTHER_EXPENSES", "PL.REVENUE"], "detailed_analytics")
+def other_expenses_to_revenue(f):
+    return safe_div(f["PL.OTHER_EXPENSES"], f["PL.REVENUE"])
+
+
+@metric("finance_cost_to_revenue", "1.0", "%", ["PL.FINANCE_COST", "PL.REVENUE"], "detailed_analytics")
+def finance_cost_to_revenue(f):
+    return safe_div(f["PL.FINANCE_COST"], f["PL.REVENUE"])
+
+
+@metric("working_capital", "1.0", "INR", ["BS.CA.TOTAL", "BS.CL.TOTAL"], "detailed_analytics")
+def working_capital(f):
+    return f["BS.CA.TOTAL"] - f["BS.CL.TOTAL"]
+
+
+@metric("net_debt", "1.0", "INR",
+        ["BS.CL.SHORT_TERM_BORROWINGS", "BS.NCL.LONG_TERM_BORROWINGS", "BS.CA.CASH"], "detailed_analytics")
+def net_debt(f):
+    return f["BS.CL.SHORT_TERM_BORROWINGS"] + f["BS.NCL.LONG_TERM_BORROWINGS"] - f["BS.CA.CASH"]
+
+
+@metric("net_debt_to_ebitda", "1.0", "x",
+        ["BS.CL.SHORT_TERM_BORROWINGS", "BS.NCL.LONG_TERM_BORROWINGS", "BS.CA.CASH",
+         "PL.REVENUE", "PL.OTHER_INCOME", "PL.COGS", "PL.EMPLOYEE_COST", "PL.OTHER_EXPENSES"], "detailed_analytics")
+def net_debt_to_ebitda(f):
+    return safe_div(net_debt(f), _ebitda(f))
+
+
+@metric("ebitda_growth_yoy", "1.0", "%",
+        ["PL.REVENUE", "PL.OTHER_INCOME", "PL.COGS", "PL.EMPLOYEE_COST", "PL.OTHER_EXPENSES"], "detailed_analytics",
+        periods_needed=2)
+def ebitda_growth_yoy(f_curr, f_prev):
+    prev = _ebitda(f_prev)
+    return safe_div(_ebitda(f_curr) - prev, abs(prev) if prev else None)
 
 
 def compute_all(facts_by_period: dict[date, dict[str, float]]) -> list[dict]:
@@ -217,7 +300,16 @@ def compute_all(facts_by_period: dict[date, dict[str, float]]) -> list[dict]:
     return results
 
 
-tool("metrics.compute", allowed_agents=["ratio", "cash_wc", "forecast", "risk", "gst", "insight_reasoner"])(compute_all)
+tool("metrics.compute", allowed_agents=["ratio", "cash_wc", "forecast", "risk", "gst", "detailed_analytics",
+                                        "insight_reasoner"])(compute_all)
+
+
+def metric_row_id(dataset_version_id: str, metric_code: str, period_end: date) -> str:
+    """Metric primary keys are scoped by dataset version. They used to be just
+    m_<code>_<period>, so a second job covering the same periods looked up the first job's
+    row by id and re-pointed it at itself -- silently breaking the first job's placeholders,
+    charts and Q&A (and racing when two jobs ran concurrently)."""
+    return f"m_{dataset_version_id}_{metric_code}_{period_end.isoformat()}"
 
 
 def persist_metrics(dataset_version_id: str, metric_dicts: list[dict]) -> list:
@@ -226,7 +318,7 @@ def persist_metrics(dataset_version_id: str, metric_dicts: list[dict]) -> list:
 
     saved = []
     for m in metric_dicts:
-        metric_id = f"m_{m['metric_code']}_{m['period_end'].isoformat()}"
+        metric_id = metric_row_id(dataset_version_id, m["metric_code"], m["period_end"])
         row = db.session.get(Metric, metric_id) or Metric(id=metric_id, dataset_version=dataset_version_id)
         row.dataset_version = dataset_version_id
         row.metric_code = m["metric_code"]

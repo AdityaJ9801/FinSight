@@ -46,15 +46,15 @@ def test_pending_instruction_gets_applied_to_analysis_stage_agents(app):
 
         guidance = apply_pending_instructions(job, llm, stage="analysis")
 
-        # full_analysis runs all 5 analysis modules; the fake backend applies to all of them.
-        assert set(guidance.keys()) == {"ratio", "cash_wc", "forecast", "risk", "gst"}
+        # full_analysis runs all 6 analysis modules; the fake backend applies to all of them.
+        assert set(guidance.keys()) == {"ratio", "cash_wc", "forecast", "risk", "gst", "detailed_analytics"}
         for note in guidance.values():
             assert "legal settlement" in note
 
         refreshed = db.session.get(JobInstruction, instruction.id)
         assert refreshed.status == "applied"
         assert refreshed.stage_applied == "analysis"
-        assert set(refreshed.target_agents) == {"ratio", "cash_wc", "forecast", "risk", "gst"}
+        assert set(refreshed.target_agents) == {"ratio", "cash_wc", "forecast", "risk", "gst", "detailed_analytics"}
         assert "legal settlement" in refreshed.orchestrator_note
 
         # Visible in the same task-trace stream the frontend renders (GET /api/jobs/<id>/tasks).

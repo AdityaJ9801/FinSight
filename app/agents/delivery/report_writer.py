@@ -9,6 +9,7 @@ from app.domain.validation_rules import within_materiality
 from app.llm_gateway import prompts
 from app.llm_gateway.prompt_utils import embed_json
 from app.models.review import ReviewItem
+from app.orchestrator import blackboard
 from app.tools.report_render import lint_unbound_numbers
 from app.utils import storage
 
@@ -22,14 +23,9 @@ class ReportWriterAgent(WorkerAgent):
         payload = json.loads(storage.resolve(insights_uri).read_text())
         insights = payload.get("insights", [])
 
-        # Load rendered charts if chart_spec has already run
-        charts: list[dict] = []
-        charts_path = f"{spec.job_id}/delivery/charts.json"
-        if storage.resolve(charts_path).exists():
-            try:
-                charts = json.loads(storage.resolve(charts_path).read_text())
-            except Exception:
-                charts = []
+        # chart_spec is a declared dependency of this agent (see the agent registry), so on
+        # the pipeline path its charts are always on the blackboard by now.
+        charts: list[dict] = blackboard.read(spec.job_id, "charts") or []
 
         # Deterministic skeleton planning: anchor sections and required topics in data
         skeleton = build_report_skeleton(
@@ -118,7 +114,7 @@ class ReportWriterAgent(WorkerAgent):
         draft_dict["data_diagnostic_section"] = diag_sec
         draft_dict["skeleton"] = skeleton
 
-        uri = storage.write_text(f"{spec.job_id}/delivery/draft.json", json.dumps(draft_dict))
+        uri = blackboard.write(spec.job_id, "draft", draft_dict)
         issues = [Issue(severity="warn", code="UNBOUND_NUMBER", message=tok) for tok in lint_issues]
 
         return AgentResult(

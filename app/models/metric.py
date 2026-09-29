@@ -6,7 +6,7 @@ class Metric(db.Model):
 
     __tablename__ = "metrics"
 
-    id = db.Column(db.String(80), primary_key=True)  # 'm_current_ratio_FY24'
+    id = db.Column(db.String(160), primary_key=True)  # 'm_<dataset_version>_current_ratio_2024-03-31'
     dataset_version = db.Column(db.String(36), db.ForeignKey("dataset_versions.id"), nullable=False, index=True)
     metric_code = db.Column(db.String(60), nullable=False, index=True)
     period_end = db.Column(db.Date, nullable=False)

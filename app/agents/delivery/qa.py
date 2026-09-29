@@ -5,8 +5,6 @@ than free-form SQL generation -- see that module's docstring for why.
 """
 from __future__ import annotations
 
-import json
-
 from app.agents.base import AgentResult, ArtifactRef, Status, TaskSpec, WorkerAgent
 from app.agents.schemas import QAAnswerResult, RouteDecision
 from app.extensions import db
@@ -17,7 +15,7 @@ from app.models.document import Document
 from app.domain.financial_intelligence import build_cfo_diagnostic_trace, resolve_metric_tree
 from app.models.finding import Finding
 from app.tools.calc.metrics import REGISTRY
-from app.utils import storage
+from app.orchestrator import blackboard
 
 _CONVERSATIONAL_WORDS = {
     "ok", "okay", "thanks", "thank you", "great", "got it", "understood",
@@ -90,14 +88,7 @@ class QAAgent(WorkerAgent):
         report_data: list[dict] = []
 
         # Load available charts if present for this job
-        all_charts: list[dict] = []
-        if job_id:
-            charts_path = f"{job_id}/delivery/charts.json"
-            if storage.resolve(charts_path).exists():
-                try:
-                    all_charts = json.loads(storage.resolve(charts_path).read_text())
-                except Exception:
-                    all_charts = []
+        all_charts: list[dict] = (blackboard.read(job_id, "charts") or []) if job_id else []
 
         matched_tree = resolve_metric_tree(question)
 
@@ -145,14 +136,9 @@ class QAAgent(WorkerAgent):
             findings = Finding.query.filter_by(dataset_version=dataset_version_id).limit(15).all()
             report_data = [{"module": f.module, "title": f.title, "body": f.body, "severity": f.severity} for f in findings]
             if job_id:
-                insights_path = f"{job_id}/delivery/insights.json"
-                if storage.resolve(insights_path).exists():
-                    try:
-                        ins_payload = json.loads(storage.resolve(insights_path).read_text())
-                        for item in ins_payload.get("insights", [])[:5]:
-                            report_data.append({"module": "insight", "title": item.get("title"), "body": item.get("body")})
-                    except Exception:
-                        pass
+                ins_payload = blackboard.read(job_id, "insights") or {}
+                for item in ins_payload.get("insights", [])[:5]:
+                    report_data.append({"module": "insight", "title": item.get("title"), "body": item.get("body")})
             # Provide high-level chart titles so report overview has complete context
             if all_charts:
                 charts_data = [{"chart_id": c.get("chart_id"), "title": c.get("title"), "caption": c.get("caption", "")} for c in all_charts[:4]]

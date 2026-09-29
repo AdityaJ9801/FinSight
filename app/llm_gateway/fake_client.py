@@ -107,11 +107,11 @@ def _map_labels(text: str) -> list[dict]:
     labels = extract_json("LABELS_JSON", text) or []
     out = []
     for label in labels:
-        account_id = lookup_synonym(label)
+        account_id = lookup_synonym(label.split("  [section:", 1)[0])
         if account_id:
             out.append({"source_label": label, "account_id": account_id, "confidence": 0.9})
         else:
-            out.append({"source_label": label, "account_id": "BS.CA.OTHER", "confidence": 0.3})
+            out.append({"source_label": label, "account_id": "UNMAPPED", "confidence": 0.3})
     return out
 
 
@@ -156,7 +156,8 @@ def _insights_from_metrics(text: str) -> list[dict]:
 def _chart_captions(text: str) -> list[dict]:
     charts = extract_json("CHARTS_JSON", text) or []
     return [
-        {"chart_id": c.get("chart_id", ""), "caption": f"{c.get('title', 'This chart')} over the periods shown."}
+        {"chart_id": c.get("chart_id", ""),
+         "caption": (c.get("computed_takeaway") or f"{c.get('title', 'This chart')} over the periods shown.")}
         for c in charts if c.get("chart_id")
     ]
 

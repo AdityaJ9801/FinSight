@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 from flask import current_app
 
 from app.agents.base import AgentResult, ArtifactRef, Status, TaskSpec, WorkerAgent
@@ -13,10 +11,10 @@ from app.models.dataset import DatasetVersion
 from app.models.finding import Finding
 from app.models.metric import Metric
 from app.models.tenant import Entity
+from app.orchestrator import blackboard
 from app.tools.calc.health_score import compute_health_score
 from app.tools.calc.metrics import persist_metrics
 from app.tools.web_search import WebSearchError
-from app.utils import storage
 
 
 class InsightReasonerAgent(WorkerAgent):
@@ -83,7 +81,7 @@ class InsightReasonerAgent(WorkerAgent):
             "insights": [i.model_dump() for i in insight_set.insights], "health_score": health,
             "findings": findings_ctx, "metrics": metrics_ctx, "benchmark_context": benchmark_context,
         }
-        uri = storage.write_text(f"{spec.job_id}/delivery/insights.json", json.dumps(payload))
+        uri = blackboard.write(spec.job_id, "insights", payload)
 
         return AgentResult(
             task_id=spec.task_id, status=Status.DONE,

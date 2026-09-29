@@ -28,12 +28,23 @@ from app.models.metric import Metric
 from app.models.review import ReviewItem
 from app.models.validation import ValidationResult
 from app.tools.report_render import format_indian_number
+from app.utils.money import display_scale_for, format_money
+
+# checks whose "diff" is a count of items, not an amount
+_COUNT_CHECKS = {"BANK_RUNNING", "DUPLICATES"}
 
 _CHECK_LABELS: dict[str, str] = {
     "BS_BALANCE": "Balance Sheet Balancing (Total Assets = Total Equity & Liabilities)",
     "PL_SUBTOTALS": "P&L Arithmetic Continuity (Recomputed PAT = Stated PAT)",
+    "PL_EXPENSE_LINES": "P&L Expense Lines Tie to Stated Total Expenses",
+    "PL_OPERATING": "Total Income - Total Expenses = Profit Before Exceptional Items & Tax",
+    "PL_EXCEPTIONAL": "Profit Before Exceptional Items + Exceptional Items = PBT",
+    "PL_TAX": "PBT - Tax = Profit After Tax",
+    "BS_ASSET_SIDE": "Current + Non-current Assets = Total Assets",
+    "BS_FUNDING_SIDE": "Equity + Non-current + Current Liabilities = Total Equity & Liabilities",
+    "SCHEDULE_TIE": "Supporting Schedule Ties to Statement Line",
     "CF_CASH_TIE": "Cash Flow Tie (Net Cash Movement = Cash & Cash Equivalents Change)",
-    "PL_BS_LINK": "Retained Earnings Continuity (Opening Reserves + PAT = Closing Reserves)",
+    "PL_BS_LINK": "Reserves Continuity (Opening Reserves + Comprehensive Income - Dividends = Closing)",
     "BANK_RUNNING": "Bank Statement Running Balance Continuity",
     "DUPLICATES": "Document Ingestion Deduplication (SHA-256 Hash Verification)",
 }
@@ -68,6 +79,8 @@ def build_data_diagnostic_section(
         job = db.session.get(Job, job_id)
         if job and job.dataset_version_id:
             dataset_version_id = job.dataset_version_id
+
+    money_scale = display_scale_for(dataset_version_id)
 
     # -------------------------------------------------------------------------
     # 1. Dataset Integrity & Reconciliation Audit
@@ -110,6 +123,7 @@ def build_data_diagnostic_section(
     pass_cnt = 0
     warn_cnt = 0
     fail_cnt = 0
+    skipped_cnt = 0
 
     if dataset_version_id:
         val_results = ValidationResult.query.filter_by(dataset_version=dataset_version_id).all()
@@ -121,25 +135,45 @@ def build_data_diagnostic_section(
             elif st == "warn":
                 warn_cnt += 1
                 st_text = "Minor Gap"
+            elif st == "skipped":
+                # couldn't run (inputs missing) -- a coverage gap, not a discrepancy
+                skipped_cnt += 1
+                st_text = "Not Run"
             else:
                 fail_cnt += 1
                 st_text = "Discrepancy"
 
             diff_val = float(v.diff) if v.diff is not None else 0.0
+            if v.check_code in _COUNT_CHECKS:
+                diff_str = "None" if not diff_val else f"{int(diff_val)} item(s)"
+            else:
+                diff_str = "—" if v.diff is None else ("Exact match" if abs(diff_val) < 0.5 else format_money(diff_val, money_scale))
+            details = v.details if isinstance(v.details, dict) else {}
+            label = _CHECK_LABELS.get(v.check_code, v.check_code)
+            if v.check_code == "SCHEDULE_TIE" and details.get("rule"):
+                label = details["rule"]
+            if details.get("period_end"):
+                label = f"{label} — {details['period_end']}"
+            if st == "skipped" and details.get("reason"):
+                label = f"{label} ({details['reason']})"
             checks_list.append({
                 "code": v.check_code,
-                "label": _CHECK_LABELS.get(v.check_code, v.check_code),
+                "label": label,
                 "status": st,
                 "status_text": st_text,
                 "expected": float(v.expected) if v.expected is not None else None,
                 "actual": float(v.actual) if v.actual is not None else None,
                 "diff": diff_val,
+                "diff_str": diff_str,
                 "explanation": (v.details or {}).get("explanation") if isinstance(v.details, dict) else None,
             })
 
-    if fail_cnt == 0 and warn_cnt == 0:
+    if fail_cnt == 0 and warn_cnt == 0 and skipped_cnt == 0:
         reconciliation_status = "Verified & 100% Balanced"
         recon_badge_class = "pass"
+    elif fail_cnt == 0 and warn_cnt == 0:
+        reconciliation_status = f"Balanced; {skipped_cnt} check(s) could not run on the data provided"
+        recon_badge_class = "warn"
     elif fail_cnt == 0:
         reconciliation_status = "Reconciled with Acceptable Materiality Gaps"
         recon_badge_class = "warn"
@@ -253,7 +287,7 @@ def build_data_diagnostic_section(
         latest = series[-1]
         latest_val = float(latest["value"])
         latest_period = latest.get("period_end") or "Current"
-        formatted_val = format_indian_number(latest_val, unit)
+        formatted_val = format_indian_number(latest_val, unit, money_scale)
 
         prior_val = None
         direction = "stable"
@@ -298,7 +332,7 @@ def build_data_diagnostic_section(
 
         # Refined what changed summary
         if prior_val is not None:
-            prior_fmt = format_indian_number(prior_val, unit)
+            prior_fmt = format_indian_number(prior_val, unit, money_scale)
             what_changed_desc = (
                 f"{name} stands at {formatted_val} (as of {latest_period}), moving from {prior_fmt} in prior period. "
                 f"Governed mathematically by: {trace['formula']}."
@@ -343,7 +377,7 @@ def build_data_diagnostic_section(
         md_lines.append("#### Key Statement Integrity Checks:")
         for chk in checks_list:
             icon = "✓" if chk["status"] == "pass" else ("⚠" if chk["status"] == "warn" else "✗")
-            diff_str = f" (Variance: ₹{chk['diff']:,.2f})" if chk["diff"] != 0 else " (Exact Match)"
+            diff_str = f" (Variance: {chk['diff_str']})"
             md_lines.append(f"- {icon} **{chk['label']}**: {chk['status_text']}{diff_str}")
         md_lines.append("")
 

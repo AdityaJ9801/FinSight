@@ -59,6 +59,16 @@ CANONICAL_ACCOUNTS: list[tuple[str, str, str, str | None, str]] = [
     ("PL.PURCHASES_STOCK_IN_TRADE", "Purchases of Stock-in-Trade", "PL", None, "debit"),
     ("PL.CHANGES_IN_INVENTORY", "Changes in Inventories", "PL", None, "debit"),
     ("PL.EXCEPTIONAL_ITEMS", "Exceptional Items", "PL", None, "debit"),
+    # Ind AS / Schedule III subtotals and captions that real statements always carry. Without
+    # named accounts they were force-fit into PL.OTHER_EXPENSES / PL.PBT / PL.OTHER_INCOME by
+    # low-confidence guesses and broke the P&L tie-out (confirmed on a real listed-company
+    # workbook: "Total expenses", "Profit before exceptional items and tax", OCI lines).
+    ("PL.TOTAL_EXPENSES", "Total Expenses", "PL", None, "debit"),
+    ("PL.EXPENSES_CAPITALISED", "Expenditure Transferred to Capital Account", "PL", None, "credit"),
+    ("PL.PBEIT", "Profit Before Exceptional Items and Tax", "PL", None, "credit"),
+    ("PL.OCI", "Other Comprehensive Income", "PL", None, "credit"),
+    ("PL.TOTAL_COMPREHENSIVE_INCOME", "Total Comprehensive Income", "PL", None, "credit"),
+    ("BS.TOTAL_LIABILITIES", "Total Liabilities", "BS", None, "credit"),
     # --- Cash flow ---
     ("CF.OPERATING", "Net Cash from Operating Activities", "CF", None, "debit"),
     ("CF.INVESTING", "Net Cash from Investing Activities", "CF", None, "debit"),
@@ -66,6 +76,12 @@ CANONICAL_ACCOUNTS: list[tuple[str, str, str, str | None, str]] = [
     ("CF.NET_CHANGE", "Net Change in Cash", "CF", None, "debit"),
     ("CF.OPENING_CASH", "Opening Cash Balance", "CF", None, "debit"),
     ("CF.CLOSING_CASH", "Closing Cash Balance", "CF", None, "debit"),
+    ("CF.DIVIDENDS_PAID", "Dividends Paid", "CF", None, "credit"),
+    # Capital expenditure (cash paid for PPE / intangibles), from the investing section --
+    # needed for a standard free cash flow (OCF - capex) instead of OCF + all investing
+    # cash flows, which counted acquisitions of subsidiaries and financial investments as
+    # if they were capex.
+    ("CF.CAPEX", "Capital Expenditure (Purchase of PPE and Intangibles)", "CF", None, "credit"),
 ]
 
 # normalized source label -> canonical account id. Extend freely; this is the "memory
@@ -180,7 +196,203 @@ LABEL_SYNONYMS: dict[str, str] = {
     "opening cash balance": "CF.OPENING_CASH",
     "cash and cash equivalents at end of year": "CF.CLOSING_CASH",
     "closing cash balance": "CF.CLOSING_CASH",
+    # --- Ind AS captions (listed-company layouts) ---
+    "other equity": "BS.EQ.RESERVES",
+    "total liabilities": "BS.TOTAL_LIABILITIES",
+    "total expenses": "PL.TOTAL_EXPENSES",
+    "total expenditure": "PL.TOTAL_EXPENSES",
+    "expenditure transferred to capital account": "PL.EXPENSES_CAPITALISED",
+    "expenditure transferred to capital and other accounts": "PL.EXPENSES_CAPITALISED",
+    "expenses capitalised": "PL.EXPENSES_CAPITALISED",
+    "profit before exceptional items and tax": "PL.PBEIT",
+    "profit before exceptional items and taxes": "PL.PBEIT",
+    "profitloss before exceptional items and tax": "PL.PBEIT",
+    "total exceptional items": "PL.EXCEPTIONAL_ITEMS",
+    "exceptional items net": "PL.EXCEPTIONAL_ITEMS",
+    "total tax expense": "PL.TAX",
+    "total tax expenses": "PL.TAX",
+    "total income tax expense": "PL.TAX",
+    "profitloss for the year": "PL.PAT",
+    "profit for the period": "PL.PAT",
+    "total other comprehensive income for the year": "PL.OCI",
+    "total other comprehensive income": "PL.OCI",
+    "other comprehensive income for the year": "PL.OCI",
+    "total comprehensive income for the year": "PL.TOTAL_COMPREHENSIVE_INCOME",
+    "total comprehensive income": "PL.TOTAL_COMPREHENSIVE_INCOME",
+    "changes in inventories of finished goods work-in-progress and stock-in-trade": "PL.CHANGES_IN_INVENTORY",
+    "changes in inventories of finishedsemi-finished goods stock-in-trade & wip": "PL.CHANGES_IN_INVENTORY",
+    "cost of raw materials consumed": "PL.COGS",
+    "net cash fromused in operating activities": "CF.OPERATING",
+    "net cash generated fromused in operating activities": "CF.OPERATING",
+    "net cash fromused in investing activities": "CF.INVESTING",
+    "net cash fromused in financing activities": "CF.FINANCING",
+    "net increasedecrease in cash and cash equivalents": "CF.NET_CHANGE",
+    "opening cash and cash equivalents": "CF.OPENING_CASH",
+    "closing cash and cash equivalents": "CF.CLOSING_CASH",
+    "cash and cash equivalents at the beginning of the year": "CF.OPENING_CASH",
+    "cash and cash equivalents at the end of the year": "CF.CLOSING_CASH",
+    # Note/schedule totals of statement lines -- used to tie schedules back to the statements
+    "total inventories": "BS.CA.INVENTORY",
+    "total trade receivables": "BS.CA.TRADE_RECEIVABLES",
+    "total trade receivables net": "BS.CA.TRADE_RECEIVABLES",
+    "total trade payables": "BS.CL.TRADE_PAYABLES",
+    "purchase of capital assets": "CF.CAPEX",
+    "purchase of property plant and equipment": "CF.CAPEX",
+    "purchase of property plant and equipment and intangible assets": "CF.CAPEX",
+    "purchases of property plant and equipment": "CF.CAPEX",
+    "acquisition of property plant and equipment": "CF.CAPEX",
+    "payments for property plant and equipment": "CF.CAPEX",
+    "purchase of fixed assets": "CF.CAPEX",
+    "purchase of tangible and intangible assets": "CF.CAPEX",
+    "purchase of intangible assets": "CF.CAPEX",
+    "capital expenditure": "CF.CAPEX",
+    "capital expenditure on fixed assets": "CF.CAPEX",
+    "dividend paid": "CF.DIVIDENDS_PAID",
+    "dividends paid": "CF.DIVIDENDS_PAID",
+    "dividends paid to equity shareholders": "CF.DIVIDENDS_PAID",
 }
+
+# Special account id a mapper may return for a row that has no place in the canonical
+# ledger (a disclosure, ratio, count, sub-schedule breakdown, loan-by-loan list...). Such
+# rows produce no fact at all -- they used to be forced into BS.CA.OTHER at low confidence,
+# which summed hundreds of unrelated note rows into "other current assets".
+UNMAPPED = "UNMAPPED"
+
+# Labels whose meaning depends on the statement section they appear under ("Borrowings"
+# under Non-current liabilities vs Current liabilities). Resolved by contextual_account().
+_SECTION_SIDES = [
+    # (substring in the normalized section path, side) -- checked most-specific first
+    ("non-current assets", "NCA"), ("non current assets", "NCA"), ("fixed assets", "NCA"),
+    ("current assets", "CA"),
+    ("non-current liabilities", "NCL"), ("non current liabilities", "NCL"),
+    ("current liabilities", "CL"),
+    ("equity", "EQ"),
+]
+_SIDE_OTHER = {"NCA": "BS.NCA.OTHER", "CA": "BS.CA.OTHER", "NCL": "BS.NCL.OTHER", "CL": "BS.CL.OTHER"}
+_BORROWING_LABELS = {"borrowings", "loans and borrowings", "borrowing", "debt", "loans from banks"}
+
+# P&L sections whose rows are components of one canonical account; the section's own
+# "Total ..." row wins over its components when present (see facts.py resolution).
+_PL_SECTION_ACCOUNTS = [
+    ("other comprehensive income", "PL.OCI"),
+    ("exceptional item", "PL.EXCEPTIONAL_ITEMS"),
+    ("tax expense", "PL.TAX"),
+    ("income tax", "PL.TAX"),
+]
+
+_LEADING_NOISE = re.compile(r"^(?:\(?[a-z]{1,4}\)|\(?[ivxlc]{1,5}\)|[a-z]\.|\d+[.)]|less:?|add:?)\s+", re.IGNORECASE)
+
+
+def section_side(section: str | None) -> str | None:
+    if not section:
+        return None
+    s = normalize_label(section)
+    for needle, side in _SECTION_SIDES:
+        if needle in s:
+            return side
+    return None
+
+
+def strip_label_noise(label: str) -> str:
+    """'(a) Raw materials' -> 'Raw materials'; 'Less: Expenditure ...' -> 'Expenditure ...'."""
+    out = label.strip()
+    for _ in range(3):
+        new = _LEADING_NOISE.sub("", out).strip()
+        if new == out:
+            break
+        out = new
+    return out
+
+
+def is_total_label(label: str) -> bool:
+    n = normalize_label(label)
+    return n.startswith(("total", "subtotal", "sub-total", "sub total", "grand total"))
+
+
+def contextual_account(label: str, section: str | None, statement: str | None) -> str | None:
+    """Section-aware mapping for labels whose account depends on where they sit. Only
+    returns an answer when the context makes it unambiguous."""
+    n = normalize_label(strip_label_noise(label))
+    if statement in (None, "BS"):
+        side = section_side(section)
+        if n in _BORROWING_LABELS or n.startswith("borrowings"):
+            if side == "NCL":
+                return "BS.NCL.LONG_TERM_BORROWINGS"
+            if side == "CL":
+                return "BS.CL.SHORT_TERM_BORROWINGS"
+    if statement in (None, "PL") and section:
+        s = normalize_label(section)
+        for needle, account in _PL_SECTION_ACCOUNTS:
+            if needle in s and not n.startswith("earnings per"):
+                return account
+    return None
+
+
+def section_other_bucket(section: str | None) -> str | None:
+    """The balance-sheet side bucket for an otherwise-unmatched line inside a primary balance
+    sheet (e.g. 'Right-of-use assets' under Non-current assets -> BS.NCA.OTHER)."""
+    return _SIDE_OTHER.get(section_side(section))
+
+
+_UNIT_PATTERNS = [
+    (re.compile(r"\b(?:in\s+)?(?:rs\.?|inr|₹)?\s*crores?\b|\bcr\.?\)|\(₹\s*cr\b", re.IGNORECASE), 10_000_000),
+    (re.compile(r"\blakhs?\b|\blacs?\b", re.IGNORECASE), 100_000),
+    (re.compile(r"\bbillions?\b|\bbn\b", re.IGNORECASE), 1_000_000_000),
+    (re.compile(r"\bmillions?\b|\bmn\b", re.IGNORECASE), 1_000_000),
+    (re.compile(r"'000|\bthousands?\b|\bin\s+000s?\b|\(000\)", re.IGNORECASE), 1_000),
+]
+
+
+def detect_unit_scale(text: str) -> float | None:
+    """Deterministic unit-scale detection from a document's header/metadata text ('(₹
+    crore)', 'Rs. in lakhs', "INR '000"). The LLM classifier's guess varied by model (one
+    returned 1 for a '(₹ crore)' workbook, another 10^7), so a stated unit always wins."""
+    for pattern, scale in _UNIT_PATTERNS:
+        if pattern.search(text or ""):
+            return float(scale)
+    return None
+
+
+# Sheets that are notes/schedules supporting the primary statements. Their rows break a
+# statement line down (loan-by-loan lists, ageing buckets, inventory categories) or disclose
+# non-ledger facts, so they must never be added into the primary statement accounts.
+_SUPPORTING_SHEET_WORDS = ("ageing", "aging", "schedule", "note", "inventor", "loan", "borrowing", "tax",
+                           "receivable", "payable", "debtor", "creditor", "register", "gst", "fixed asset",
+                           "ppe", "segment", "related part", "contingent", "lease", "employee", "share capital")
+
+
+def sheet_role(table_name: str | None, doc_type: str | None, rule_hits: set[str]) -> str:
+    """'primary' for a sheet/table that IS a financial statement, 'supporting' otherwise.
+    Decided by sheet name first, then by whether its rows contain a statement's defining
+    totals (a sheet that states Total Assets / PAT / Net cash from operations is a statement)."""
+    if infer_statement_hint(table_name):
+        return "primary"
+    name = (table_name or "").strip().lower()
+    if name and any(w in name for w in _SUPPORTING_SHEET_WORDS):
+        return "supporting"
+    anchors = {"BS.TOTAL_ASSETS", "BS.TOTAL_EQUITY_LIAB", "PL.PAT", "PL.PBT", "PL.REVENUE", "CF.OPERATING",
+               "CF.NET_CHANGE"}
+    if rule_hits & anchors and len(rule_hits) >= 3:
+        return "primary"
+    if doc_type in ("balance_sheet", "pnl", "cash_flow", "trial_balance") and not name:
+        return "primary"  # a single-table CSV/PDF classified as a statement
+    return "supporting"
+
+
+def lookup_prefix_synonym(label: str, statement_hint: str | None = None) -> str | None:
+    """'Trade payables — dues of micro & small enterprises' -> BS.CL.TRADE_PAYABLES: the
+    longest multi-word synonym that the label starts with. Single-word keys ('sales',
+    'purchases', 'basic') are excluded -- too easy to match the wrong line."""
+    n = normalize_label(strip_label_noise(label))
+    best = None
+    for key, account_id in LABEL_SYNONYMS.items():
+        if " " not in key or not n.startswith(key + " "):
+            continue
+        if statement_hint is not None and ACCOUNT_STATEMENT.get(account_id) != statement_hint:
+            continue
+        if best is None or len(key) > len(best[0]):
+            best = (key, account_id)
+    return best[1] if best else None
 
 
 ACCOUNT_STATEMENT: dict[str, str] = {acc_id: statement for acc_id, _, statement, _, _ in CANONICAL_ACCOUNTS}
@@ -228,7 +440,7 @@ def infer_statement_hint(table_name: str | None) -> str | None:
 
 
 def lookup_synonym(label: str, statement_hint: str | None = None) -> str | None:
-    account_id = LABEL_SYNONYMS.get(normalize_label(label))
+    account_id = LABEL_SYNONYMS.get(normalize_label(label)) or LABEL_SYNONYMS.get(normalize_label(strip_label_noise(label)))
     if account_id is None:
         return None
     if statement_hint is not None and ACCOUNT_STATEMENT.get(account_id) != statement_hint:

@@ -44,6 +44,10 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(search_bp, url_prefix="/api/search")
     app.register_blueprint(llm_bp, url_prefix="/api/llm")
 
+    from app.api.agents import bp as agents_bp
+
+    app.register_blueprint(agents_bp, url_prefix="/api/agents")
+
     @app.get("/api/health")
     def health():
         return {"status": "ok"}

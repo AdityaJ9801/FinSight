@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from flask import current_app
 
+from app.agents import registry as agent_registry
 from app.agents.schemas import InstructionInterpretation
 from app.extensions import db
 from app.llm_gateway import prompts
@@ -17,25 +18,11 @@ from app.models.job import Job, JobInstruction, TaskRun
 from app.orchestrator.templates import is_valid_template
 from app.utils.ids import new_id
 
-# What each stage's agents actually do, for the orchestrator to match a user's mid-run
-# instruction against -- kept here (not derived from the agent classes themselves) since
-# it's a plain-language description for an LLM prompt, not code the agents need to see.
+# What each stage's steerable agents do, for the orchestrator to match a user's mid-run
+# instruction against. Derived from the agent registry (app/agents/registry.py) so a new
+# agent becomes routable by registering it once, not by editing this table too.
 STAGE_AGENT_DESCRIPTIONS: dict[str, dict[str, str]] = {
-    "data": {
-        "schema_mapper": "maps raw financial-statement row labels to canonical chart-of-accounts ids",
-    },
-    "analysis": {
-        "ratio": "computes profitability/liquidity/leverage/efficiency ratios and writes trend findings",
-        "cash_wc": "computes cash flow and working capital metrics and findings",
-        "forecast": "projects future revenue/PAT and writes forecast findings",
-        "risk": "flags anomalies/red flags and computes the overall risk score",
-        "gst": "reconciles GST returns against the ledger",
-    },
-    "delivery": {
-        "insight_reasoner": "synthesizes findings across all analysis modules into ranked insights and computes health score",
-        "report_writer": "drafts the executive financial analysis report and narrative",
-        "chart_spec": "selects and renders financial trend charts and cost structure visualizations",
-    },
+    stage: agent_registry.steerable_descriptions(stage) for stage in agent_registry.STAGES
 }
 
 

@@ -81,7 +81,8 @@ REPORT_CATEGORIES: list[CategoryDef] = [
         key="working_capital",
         title="Working Capital & Operating Cash Cycles",
         description="Operational cash conversion cycle, receivables ageing, inventory holding, and cash flow generation.",
-        metric_codes=["dso", "dio", "dpo", "cash_conversion_cycle", "ocf_to_pat", "free_cash_flow"],
+        metric_codes=["dso", "dio", "dpo", "cash_conversion_cycle", "ocf_to_pat", "free_cash_flow",
+                      "net_cash_after_investing"],
         finding_modules=["cash_wc"],
         chart_titles=["Cash Conversion Cycle (Days)"],
         required_topics=[
@@ -116,6 +117,24 @@ REPORT_CATEGORIES: list[CategoryDef] = [
             "Primary cost drivers (materials, direct labor, manufacturing costs)",
             "Fixed overhead and administrative cost absorption",
             "Operating leverage and margin sensitivity to cost inflation",
+        ],
+    ),
+    CategoryDef(
+        key="detailed_analysis",
+        title="Detailed Statement Analysis",
+        description="Horizontal and common-size analysis, DuPont decomposition, compound growth, the profit bridge "
+                    "and net-debt position.",
+        metric_codes=["equity_multiplier", "cogs_to_revenue", "employee_cost_to_revenue", "other_expenses_to_revenue",
+                      "finance_cost_to_revenue", "working_capital", "net_debt", "net_debt_to_ebitda", "ebit",
+                      "ebitda_growth_yoy", "revenue_cagr", "ebitda_cagr", "pat_cagr", "total_assets_cagr"],
+        finding_modules=["detailed_analytics"],
+        chart_titles=["PAT Bridge", "Common-Size P&L", "DuPont ROE Decomposition", "Bank Monthly Inflows"],
+        required_topics=[
+            "Which cost lines grew faster or slower than revenue (common-size shifts)",
+            "DuPont drivers of return on equity: margin, asset efficiency, leverage",
+            "Compound growth (CAGR) of revenue, EBITDA and PAT",
+            "The profit bridge: which lines moved PAT between the last two periods",
+            "Net debt, net debt to EBITDA and working capital position",
         ],
     ),
     CategoryDef(
@@ -192,7 +211,23 @@ def get_category_for_chart(chart_title: str) -> str | None:
     return None
 
 
+# Findings are persisted under each module's module_label ("ratio_trend",
+# "risk_anomaly", ...), not its agent name. The skeleton used to compare against agent
+# names only, so the risk and GST sections were silently never written. Normalize first.
+FINDING_MODULE_ALIASES: dict[str, str] = {
+    "ratio_trend": "ratio", "cash_working_capital": "cash_wc", "risk_anomaly": "risk",
+    "gst_compliance": "gst", "forecast": "forecast", "detailed_analytics": "detailed_analytics",
+}
+
+
+def normalize_finding_module(module: str | None) -> str | None:
+    return FINDING_MODULE_ALIASES.get(module, module) if module else module
+
+
 def get_category_for_finding(module: str) -> str | None:
+    module = normalize_finding_module(module)
+    if module == "detailed_analytics":
+        return "detailed_analysis"
     if module == "risk":
         return "risk"
     if module == "gst":
@@ -215,13 +250,13 @@ def build_report_skeleton(
     """Generates the ordered, deterministic list of sections supported by available data."""
     charts = charts or []
     metric_codes = {m.get("metric_code") or m.get("code") for m in metrics if m.get("metric_code") or m.get("code")}
-    finding_modules = {f.get("module") for f in findings if f.get("module")}
+    finding_modules = {normalize_finding_module(f.get("module")) for f in findings if f.get("module")}
 
     chart_map: dict[str, list[str]] = {}
     for c in charts:
         cid = c.get("chart_id")
         ctitle = c.get("title", "")
-        cat_key = get_category_for_chart(ctitle)
+        cat_key = c.get("section_key") or get_category_for_chart(ctitle)
         if cat_key and cid:
             chart_map.setdefault(cat_key, []).append(cid)
 
@@ -296,7 +331,9 @@ def interleave_charts_into_sections(
             cid = c.get("chart_id")
             if cid in assigned_ids:
                 continue
-            cat = get_category_for_chart(c.get("title", ""))
+            # Charts declare their section explicitly (ChartSpecAgent sets section_key); the
+            # title heuristic only covers charts from older jobs that predate that.
+            cat = c.get("section_key") or get_category_for_chart(c.get("title", ""))
             if (cat and cat == sec_key) or (cat and cat in sec_heading):
                 sec_charts.append(c)
                 assigned_ids.add(cid)

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import base64
 import io
-import json
 import re
 from datetime import date, datetime, timezone
 from typing import Any
@@ -17,6 +16,8 @@ from jinja2 import Template
 
 from app.domain.taxonomy import interleave_charts_into_sections
 from app.models.metric import Metric
+from app.orchestrator import blackboard
+from app.utils.money import display_scale_for, format_money
 from app.tools.registry import tool
 from app.utils import storage
 
@@ -36,13 +37,17 @@ _DATE_RE = re.compile(
 )
 
 
-def format_indian_number(value: float, unit: str | None) -> str:
+def format_indian_number(value: float, unit: str | None, scale: float | None = None) -> str:
+    """Formats a metric for the report. Money is shown in the source document's unit
+    (scale 1e7 -> 'Rs 1,39,720.22 Cr') so tables, narrative and charts agree; see utils/money.py."""
     if unit == "%":
         return f"{value * 100:.2f}%"
     if unit == "days":
         return f"{value:.0f} days"
     if unit == "x":
         return f"{value:.2f}x"
+    if unit in (None, "INR"):
+        return format_money(value, scale)
 
     negative = value < 0
     value = abs(value)
@@ -63,6 +68,7 @@ def format_indian_number(value: float, unit: str | None) -> str:
 
 def resolve_placeholders(text: str, dataset_version: str) -> tuple[str, list[str]]:
     unresolved: list[str] = []
+    scale = display_scale_for(dataset_version) if _PLACEHOLDER_RE.search(text or "") else None
 
     def repl(match: re.Match) -> str:
         code, period_str = match.group(1), match.group(2)
@@ -75,7 +81,7 @@ def resolve_placeholders(text: str, dataset_version: str) -> tuple[str, list[str
         if row is None or row.value is None:
             unresolved.append(match.group(0))
             return match.group(0)
-        return format_indian_number(float(row.value), row.unit)
+        return format_indian_number(float(row.value), row.unit, scale)
 
     resolved = _PLACEHOLDER_RE.sub(repl, text)
     return resolved, unresolved
@@ -317,6 +323,7 @@ _HTML_TEMPLATE = Template("""<!DOCTYPE html>
   }
   .diag-pill-pass { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
   .diag-pill-warn { background: #fef9c3; color: #854d0e; border: 1px solid #fef08a; }
+  .diag-pill-skipped { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
   .diag-pill-fail { background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
 
   .metric-diagnostic-card {
@@ -414,6 +421,18 @@ _HTML_TEMPLATE = Template("""<!DOCTYPE html>
     border-radius: 4px;
     border-left: 3px solid #94a3b8;
   }
+  /* Detailed statement analysis tables -- kept flat (no bordered wrapper): xhtml2pdf repeats a
+     container's border on every child block, and ignores :first-child selectors. */
+  .da-container { margin: 28px 0 24px 0; }
+  .da-kicker { font-size: 11px; font-weight: 700; color: #0369a1; text-transform: uppercase; letter-spacing: 0.05em; margin: 0; }
+  .da-heading { font-size: 18px; font-weight: 800; color: #0f172a; margin: 2px 0 10px 0; padding-bottom: 6px; border-bottom: 3px solid #0284c7; }
+  .da-table-title { font-size: 13px; font-weight: 700; color: #1e293b; margin: 16px 0 3px 0; }
+  .da-note { font-size: 11px; color: #64748b; margin: 0 0 5px 0; }
+  .da-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 8px; }
+  .da-table th { background: #f1f5f9; color: #334155; font-weight: 700; padding: 4px 6px; border: 1px solid #e2e8f0; text-align: right; }
+  .da-table td { padding: 4px 6px; border: 1px solid #e2e8f0; color: #334155; text-align: right; }
+  .da-table th.lbl, .da-table td.lbl { text-align: left; }
+  .diag-pill-info { background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
   .warning-block {
     background-color: #fffbeb;
     border: 1px solid #fde68a;
@@ -485,6 +504,21 @@ _HTML_TEMPLATE = Template("""<!DOCTYPE html>
         <div class="warning-heading">{{ section.heading }}</div>
         <p class="warning-body">{{ section.body }}</p>
       </div>
+    {% elif section.kind == "detailed_analysis_tables" %}
+      <div class="da-container">
+        <p class="da-kicker">Supporting tables</p>
+        <h2 class="da-heading">{{ section.heading }}</h2>
+        {% for t in section.tables %}
+          <div class="da-table-title">{{ t.title }}</div>
+          {% if t.note %}<p class="da-note">{{ t.note }}</p>{% endif %}
+          <table class="da-table">
+            <tr>{% for c in t.columns %}<th{% if loop.first %} class="lbl"{% endif %}>{{ c }}</th>{% endfor %}</tr>
+            {% for r in t.rows %}
+            <tr>{% for v in r %}<td{% if loop.first %} class="lbl"{% endif %}>{{ v }}</td>{% endfor %}</tr>
+            {% endfor %}
+          </table>
+        {% endfor %}
+      </div>
     {% elif section.kind == "data_diagnostic" or "Data Diagnostic" in section.heading %}
       <div class="data-diagnostic-container">
         <div class="diagnostic-header">
@@ -535,10 +569,10 @@ _HTML_TEMPLATE = Template("""<!DOCTYPE html>
                 <span class="diag-pill diag-pill-{{ chk.status }}">{{ chk.status_text }}</span>
               </td>
               <td style="text-align: right;">
-                {% if chk.diff == 0 %}
-                  <span style="color: #15803d; font-weight: 600;">₹0.00 (Exact Match)</span>
+                {% if chk.diff_str == "Exact match" or chk.diff_str == "None" %}
+                  <span style="color: #15803d; font-weight: 600;">{{ chk.diff_str }}</span>
                 {% else %}
-                  <span style="color: #b91c1c;">₹{{ "%.2f"|format(chk.diff) }}</span>
+                  <span style="color: #b91c1c;">{{ chk.diff_str or chk.diff }}</span>
                 {% endif %}
               </td>
             </tr>
@@ -618,9 +652,8 @@ _HTML_TEMPLATE = Template("""<!DOCTYPE html>
         {% if section.charts %}
           {% for chart in section.charts %}
           <div class="chart-container">
-            <div class="chart-title">Figure: {{ chart.title }}</div>
             <img class="chart-image" src="{{ chart.png_base64 }}" alt="{{ chart.title }}">
-            {% if chart.caption %}
+            {% if chart.caption and chart.caption != chart.takeaway %}
             <div class="chart-caption">{{ chart.caption }}</div>
             {% endif %}
           </div>
@@ -636,9 +669,8 @@ _HTML_TEMPLATE = Template("""<!DOCTYPE html>
     <h2 class="section-heading">Additional Visualizations</h2>
     {% for chart in unassigned_charts %}
     <div class="chart-container">
-      <div class="chart-title">Figure: {{ chart.title }}</div>
       <img class="chart-image" src="{{ chart.png_base64 }}" alt="{{ chart.title }}">
-      {% if chart.caption %}
+      {% if chart.caption and chart.caption != chart.takeaway %}
       <div class="chart-caption">{{ chart.caption }}</div>
       {% endif %}
     </div>
@@ -661,10 +693,9 @@ def _extract_kpis(job_id: str, metadata: dict | None = None) -> tuple[dict | Non
     if metadata and metadata.get("kpis"):
         return health_score, metadata["kpis"]
 
-    insights_path = f"{job_id}/delivery/insights.json"
-    if storage.resolve(insights_path).exists():
+    payload = blackboard.read(job_id, "insights")
+    if payload:
         try:
-            payload = json.loads(storage.resolve(insights_path).read_text())
             health_score = health_score or payload.get("health_score")
             metrics = payload.get("metrics", [])
             latest_by_code: dict[str, dict] = {}
@@ -709,14 +740,9 @@ def render_html(
     charts = charts or []
     has_diagnostic = any(s.get("kind") == "data_diagnostic" or "Data Diagnostic" in s.get("heading", "") for s in sections)
     if not has_diagnostic:
-        draft_path = f"{job_id}/delivery/draft.json"
-        if storage.resolve(draft_path).exists():
-            try:
-                draft_data = json.loads(storage.resolve(draft_path).read_text())
-                if draft_data.get("data_diagnostic_section"):
-                    sections = list(sections) + [draft_data["data_diagnostic_section"]]
-            except Exception:
-                pass
+        draft_data = blackboard.read(job_id, "draft") or {}
+        if draft_data.get("data_diagnostic_section"):
+            sections = list(sections) + [draft_data["data_diagnostic_section"]]
     enriched_sections, unassigned = interleave_charts_into_sections(sections, charts)
     health_score, kpi_cards = _extract_kpis(job_id, metadata)
     is_verified = not any("Not Verified" in s.get("heading", "") for s in sections)
@@ -749,14 +775,9 @@ def render_docx(
     charts = charts or []
     has_diagnostic = any(s.get("kind") == "data_diagnostic" or "Data Diagnostic" in s.get("heading", "") for s in sections)
     if not has_diagnostic:
-        draft_path = f"{job_id}/delivery/draft.json"
-        if storage.resolve(draft_path).exists():
-            try:
-                draft_data = json.loads(storage.resolve(draft_path).read_text())
-                if draft_data.get("data_diagnostic_section"):
-                    sections = list(sections) + [draft_data["data_diagnostic_section"]]
-            except Exception:
-                pass
+        draft_data = blackboard.read(job_id, "draft") or {}
+        if draft_data.get("data_diagnostic_section"):
+            sections = list(sections) + [draft_data["data_diagnostic_section"]]
     enriched_sections, unassigned = interleave_charts_into_sections(sections, charts)
     health_score, kpi_cards = _extract_kpis(job_id)
 
@@ -820,7 +841,7 @@ def render_docx(
                         r_cells = chk_table.rows[idx + 1].cells
                         r_cells[0].text = chk["label"]
                         r_cells[1].text = chk["status_text"]
-                        r_cells[2].text = f"Rs.{chk['diff']:,.2f}" if chk["diff"] != 0 else "Exact Match"
+                        r_cells[2].text = chk.get("diff_str") or str(chk["diff"])
                     doc.add_paragraph()
 
             mdiags = section.get("metric_diagnostics")
@@ -848,6 +869,25 @@ def render_docx(
             if int_sum and int_sum.get("notes"):
                 doc.add_heading("3. Data Quality & Methodology Notes", level=3)
                 doc.add_paragraph(int_sum["notes"])
+            continue
+
+        if section.get("kind") == "detailed_analysis_tables":
+            doc.add_heading(section["heading"], level=2)
+            tables = list(section.get("tables") or [])
+            for t in tables:
+                doc.add_heading(t["title"], level=3)
+                if t.get("note"):
+                    note = doc.add_paragraph(t["note"])
+                    note.runs[0].font.italic = True
+                    note.runs[0].font.size = Pt(9)
+                tbl = doc.add_table(rows=len(t["rows"]) + 1, cols=len(t["columns"]))
+                tbl.style = "Table Grid"
+                for ci, col in enumerate(t["columns"]):
+                    tbl.rows[0].cells[ci].text = str(col)
+                for ri, row in enumerate(t["rows"]):
+                    for ci, val in enumerate(row):
+                        tbl.rows[ri + 1].cells[ci].text = str(val)
+                doc.add_paragraph()
             continue
 
         doc.add_heading(section["heading"], level=2)
@@ -903,11 +943,20 @@ def render_docx(
     return storage.write_bytes(f"{job_id}/report/report.docx", buf.getvalue())
 
 
+# xhtml2pdf doesn't lay out a bordered wrapper as one box: it repeats the wrapper's border and
+# padding around every child block, which boxed every heading, note and paragraph of the PDF
+# separately. The page frame is enough in print, so the on-screen card styling is dropped.
+_PDF_OVERRIDES = """<style>
+  body { background-color: #ffffff; padding: 0; }
+  .report-container { border: 0; padding: 0; border-radius: 0; }
+</style>"""
+
+
 def render_pdf(job_id: str, html: str) -> str:
     from xhtml2pdf import pisa
 
     buf = io.BytesIO()
-    pisa.CreatePDF(src=html, dest=buf)
+    pisa.CreatePDF(src=html.replace("</head>", _PDF_OVERRIDES + "\n</head>", 1), dest=buf)
     return storage.write_bytes(f"{job_id}/report/report.pdf", buf.getvalue())
 
 

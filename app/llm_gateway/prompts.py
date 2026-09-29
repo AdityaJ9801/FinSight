@@ -51,12 +51,15 @@ TABLE_BOUNDARY_DETECTOR = (
 SCHEMA_MAPPER = (
     "You map raw financial statement row labels to a canonical chart-of-accounts id. The "
     "user message gives you ALLOWED_ACCOUNTS_JSON (the ONLY valid account_id values, with "
-    "their names) and LABELS_JSON (the labels to map). You see labels only, never values. "
-    "Every account_id you return MUST be one of the ids in ALLOWED_ACCOUNTS_JSON -- never "
-    "invent one. Think about what each label actually represents (a synonym, an "
-    "abbreviation, a sub-total) before matching it; if a label doesn't clearly match any "
-    "allowed id, pick the closest 'OTHER' bucket for that statement and use a low "
-    "confidence rather than forcing a wrong match. If USER_GUIDANCE_JSON is given (a note "
+    "their names) and LABELS_JSON (the labels to map). You see labels only, never values; a "
+    "label may end with '[section: ...]' giving the statement heading it sits under -- use it "
+    "(e.g. 'Borrowings' under current liabilities is short-term). Return source_label exactly "
+    "as given. Every account_id you return MUST be one of the ids in ALLOWED_ACCOUNTS_JSON -- "
+    "never invent one. Map a label only when it IS that statement line or a component of it. "
+    "Return 'UNMAPPED' for anything else: subtotals whose account you can't tell, disclosures, "
+    "ratios, per-share or count figures, breakdown rows of a line already reported, and "
+    "anything you are unsure about -- an UNMAPPED row is reviewed by a person, a wrong guess "
+    "silently corrupts every ratio. If USER_GUIDANCE_JSON is given (a note "
     "from the person running this job, relayed by the orchestrator), prefer it over your "
     "own guess for any label it specifically addresses -- but it still can't make you "
     "return an account_id outside ALLOWED_ACCOUNTS_JSON. " + DOCUMENT_SAFETY_PREAMBLE
@@ -101,7 +104,10 @@ CHART_EXPLAINER = (
     "EVERY chart in the list, write a 2-3 sentence caption (matched back by chart_id) "
     "explaining what it shows and what it means for this entity -- reference the actual "
     "trend/values given for THAT chart, never a number or trend you weren't given, and "
-    "never a chart other than the one you're captioning. " + NO_OUTSIDE_KNOWLEDGE
+    "never a chart other than the one you're captioning. Each chart has a unit ('%' values are "
+    "fractions: 0.417 means 41.7%) and a computed_takeaway already printed under its title -- "
+    "don't just repeat it: explain WHY it matters (the business driver or risk behind the "
+    "movement) and what a lender or CFO should watch next. " + NO_OUTSIDE_KNOWLEDGE
 )
 
 REPORT_WRITER = (

@@ -10,6 +10,10 @@ class RawRow:
     is_subtotal: bool = False
     indent_level: int = 0
     source_ref: dict = field(default_factory=dict)
+    # Section path the row sits under, from the value-less heading rows above it
+    # ("Current liabilities > Financial liabilities"). Needed to tell apart labels that repeat
+    # across sections ("Borrowings" appears under both non-current and current liabilities).
+    section: str = ""
 
 
 @dataclass

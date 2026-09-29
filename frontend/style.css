@@ -274,6 +274,7 @@ input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color:
 .chart-card img { width: 100%; border-radius: 6px; display: block; }
 .chart-card .chart-title { font-size: 0.8rem; font-weight: 700; margin: 0.4rem 0 0.2rem; }
 .chart-card .chart-caption { font-size: 0.76rem; color: var(--text-muted); }
+.chart-card .chart-takeaway { font-size: 0.76rem; font-weight: 600; color: var(--text); margin-bottom: 0.2rem; }
 
 .table-wrap { overflow-x: auto; margin-top: 0.5rem; max-height: 220px; overflow-y: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
@@ -282,6 +283,11 @@ th { color: var(--text-muted); font-weight: 600; font-size: 0.68rem; text-transf
 
 .status-box { background: var(--accent-soft); border-radius: var(--radius-sm); padding: 0.65rem 0.8rem; font-size: 0.78rem; white-space: pre-wrap; margin-top: 0.4rem; }
 .status-message { color: var(--text-muted); font-size: 0.78rem; }
+
+/* ---------- detailed analysis preview ---------- */
+.analysis-preview { margin-top: 0.2rem; }
+.analysis-sub { font-size: 0.74rem; font-weight: 700; margin: 0.7rem 0 0.2rem; }
+.analysis-preview td.num, .analysis-preview th:not(:first-child) { text-align: right; }
 
 .hidden { display: none !important; }
 

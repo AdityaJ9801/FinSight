@@ -1,5 +1,10 @@
 # FinSight — Multi-Agent Financial Analysis Platform
 
+![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
+![Tests](https://img.shields.io/badge/tests-89%20passing-brightgreen.svg)
+![Docker](https://img.shields.io/badge/docker-ready-blue.svg)
+
 FinSight is an end-to-end, multi-agent financial analysis platform that ingests unstructured and structured corporate financial documents (P&L, Balance Sheet, Cash Flow Statement, Bank Statements, and GST Returns) in Excel/CSV/PDF formats — including multi-sheet workbooks and files with metadata headers — extracts and reconciles them into an immutable ledger, computes standardized financial ratios, executes ML anomaly/risk/forecast analysis, and generates publication-grade executive reports with interleaved visualizations and an interactive Virtual CFO diagnostic Q&A assistant.
 
 Two interfaces access the Flask API over HTTP:
@@ -33,6 +38,20 @@ Two interfaces access the Flask API over HTTP:
   - **Multi-Turn Conversation Memory**: Tracks conversation history across turns in the interactive chat assistant.
   - **On-Demand Delivery Agent Re-Runs**: Users can steer or re-run delivery agents (`report_writer`, `insight_reasoner`, `chart_spec`) from chat, auto-regenerating verified reports and visual artifacts.
   - **Visual Chart Q&A**: Dedicated `chart_lookup` route explains visual trend graphs and cost breakdowns.
+
+- 🧮 **Detailed Statement Analysis** (`app/tools/calc/detailed_analysis.py`, `app/agents/analysis/detailed_analytics.py`):
+  horizontal (YoY) and common-size analysis of every statement line, DuPont decomposition of ROE, CAGR of
+  revenue/EBITDA/PAT/assets, a PAT bridge (profit walk) that always foots, working capital / net debt /
+  net-debt-to-EBITDA, and bank cash-flow analytics (monthly flows, counterparty concentration). Its metrics feed
+  the narrative through placeholders like every other module, and the report adds a deterministic
+  *Supporting Tables* section (HTML, DOCX, PDF).
+
+- 📈 **Decision-grade charts** (`app/agents/delivery/chart_spec.py`, `app/tools/chart_render.py`): 16 charts, each placed in its report section, with readable labels, unit-aware axes (%, x, days, Rs in lakh/crore), data labels, benchmark lines (e.g. current ratio 1.0x / 1.33x, coverage floor 1.5x) and a computed one-line takeaway — health scorecard, revenue/EBITDA/margin combo, margin profile, where each rupee of income goes, liquidity vs benchmarks, leverage & debt service, working-capital cycle, cash-flow profile, YoY growth, returns & asset efficiency, forecast with uncertainty band, PAT bridge, DuPont, balance-sheet structure, monthly bank flows and counterparty concentration.
+
+- 🧩 **Registry-driven multi-agent structure** (`app/agents/registry.py`, `app/orchestrator/executor.py`, `app/orchestrator/blackboard.py`):
+  - **Agent registry**: one declaration per agent (stage, dependencies, description, steerable/re-runnable) drives the orchestrator's routing prompt, the chat assistant's re-run options, plan templates and the web UI (`GET /api/agents`).
+  - **DAG executor**: each stage runs its agents as a dependency graph — independent agents overlap, dependents start as soon as their inputs exist, and a failing node is captured instead of sinking the stage.
+  - **Job blackboard**: agents publish and consume named artifacts (`insights`, `charts`, `draft`, `forecast`, `detailed_analysis`) instead of hard-coded file paths.
 
 ---
 
@@ -105,7 +124,7 @@ pytest
 ```
 
 The test suite runs against a deterministic fake LLM gateway without requiring external API credentials or a running Redis broker:
-- **57 unit and integration tests** covering document parsing, table detection, accounting reconciliation, metric computation, agent workflows, Virtual CFO diagnostic compendium, and end-to-end report generation.
+- **89 unit and integration tests** covering document parsing, table detection, accounting reconciliation, metric computation, agent workflows, the DAG executor and agent registry, detailed analytics, charts, Virtual CFO diagnostic compendium, and end-to-end report generation.
 
 Inside Docker:
 ```powershell
@@ -135,6 +154,10 @@ GET    /api/jobs/<job_id>/report         Rendered executive report (format=html|
 GET    /api/review/items                 List pending review items
 POST   /api/review/items/<id>/resolve    Approve or adjust low-confidence mapping / reconciliation gap
 
+# Detailed Analysis & Agents
+GET    /api/jobs/<job_id>/analysis       Detailed statement analysis (YoY, common-size, DuPont, CAGR, profit bridge, bank)
+GET    /api/agents                       Agent registry: stages, dependencies, descriptions
+
 # Virtual CFO Interactive Q&A
 POST   /api/qa                           Query ledger figures, visual charts, or root-cause diagnostics
 
@@ -163,7 +186,10 @@ Client (Web UI at :8080 or REST API at :5000)
   ▼
 Flask API Layer
   │
-  ├── Orchestrator (DAG planning, stage gating, checkpoint-based instruction injection)
+  ├── Orchestrator (plan templates, stage gating, checkpoint-based instruction injection)
+  │     │   Agent Registry: one declaration per agent -> routing, templates, assistant, UI
+  │     │   Blackboard: named job artifacts (insights, charts, draft, forecast, detailed_analysis)
+  │     │   DAG Executor: runs each stage's agents by dependency, in parallel where possible
   │     │
   │     ├── Stage 1: Data Processing
   │     │     ├── IntakeAgent (document classification)
@@ -172,24 +198,26 @@ Flask API Layer
   │     │     └── ReconcilerAgent (cross-statement consistency checks)
   │     │
   │     ├── Stage 2: Parallel Financial Analysis
-  │     │     ├── RatioAnalysisAgent (liquidity, leverage, profitability, efficiency)
+  │     │     ├── RatioTrendAgent (liquidity, leverage, profitability, efficiency)
   │     │     ├── CashWorkingCapitalAgent (cash conversion cycles, working capital)
-  │     │     ├── ForecastAgent (trend extrapolation, ARIMA/ETS projections)
+  │     │     ├── ForecastAgent (trend extrapolation, ETS projections on the fiscal calendar)
   │     │     ├── RiskAnomalyAgent (IsolationForest outlier detection, red flags)
-  │     │     └── GSTReconciliationAgent (turnover & ITC reconciliation)
+  │     │     ├── GstComplianceAgent (turnover & ITC reconciliation)
+  │     │     └── DetailedAnalyticsAgent (YoY/common-size, DuPont, CAGR, profit bridge, bank flows)
   │     │
-  │     └── Stage 3: Executive Delivery
-  │           ├── InsightReasonerAgent (ranked executive takeaways)
-  │           ├── ChartSpecAgent (matplotlib visual generation)
-  │           ├── ReportWriterAgent (deterministic taxonomy skeleton, diagnostic guides)
-  │           └── VerifierAgent (number safety checks, placeholder verification)
+  │     └── Stage 3: Executive Delivery (DAG)
+  │           ├── InsightReasonerAgent ─┐
+  │           └── ChartSpecAgent ───────┴─> ReportWriterAgent -> VerifierAgent (revision loop)
+  │                 └──> Publish: narrative + Detailed Statement Analysis tables + Data Diagnostic
+  │                      rendered to HTML / DOCX / PDF
   │
   ├── Virtual CFO QAAgent (synchronous 5-point reverse-flow diagnostic answering)
   │     └── 40-Metric Financial Intelligence Flowchart Engine
   │
   └── Tool Registry (allowlisted tool invocation per agent):
-        Parsers, Table Boundary Detection, Metrics Registry, ML Sandbox,
-        Read-only SQL, Vector Search, Web Search, Report Renderers (HTML/DOCX/PDF).
+        Parsers, Table Boundary Detection, Metrics Registry, ML Sandbox, Read-only SQL,
+        Vector Search, Web Search, Detailed Statement Analytics,
+        Report Renderers (HTML/DOCX/PDF).
 ```
 
 ---
@@ -200,20 +228,21 @@ Flask API Layer
 ├── app/
 │   ├── agents/
 │   │   ├── data/             # Intake, Extractor, Mapper, Reconciler
-│   │   ├── analysis/         # Ratio, Cash/WC, Forecast, Risk, GST
-│   │   └── delivery/         # Insight, ChartSpec, ReportWriter, Verifier, QAAgent
-│   ├── api/                  # Flask REST blueprints (jobs, review, results, qa, llm)
+│   │   ├── analysis/         # Ratio, Cash/WC, Forecast, Risk, GST, Detailed Analytics
+│   │   ├── delivery/         # Insight, ChartSpec, ReportWriter, QAAgent, publishing
+│   │   └── registry.py       # Agent registry (stages, dependencies, descriptions)
+│   ├── api/                  # Flask REST blueprints (jobs, review, results, qa, llm, agents)
 │   ├── domain/               # Chart of Accounts, Taxonomy, 40-metric Virtual CFO Compendium
 │   ├── llm_gateway/          # Unified LLM client (OpenAI, Gemini, Custom, Fake)
 │   ├── memory/               # Historical mapping memory
 │   ├── models/               # SQLAlchemy models (Job, Document, Account, Metric, Report)
-│   ├── orchestrator/         # DAG coordinator, stage gates, instruction steering
-│   ├── tools/                # Deterministic tools (parsers, metrics, ML, renderers)
+│   ├── orchestrator/         # Stage coordinator, DAG executor, blackboard, gates, instruction steering
+│   ├── tools/                # Deterministic tools (parsers, metrics, detailed analysis, ML, renderers)
 │   └── workers/              # Celery application and task definitions
 ├── frontend/                 # Responsive web application (HTML/CSS/JS)
 ├── frontend_server.py        # Static web server (FastAPI/Uvicorn)
 ├── seed/                     # Sample data (P&L, Balance Sheet, Cash Flow, Multi-sheet Excel)
-├── tests/                    # 57 automated unit and integration tests
+├── tests/                    # 89 automated unit and integration tests
 ├── Dockerfile                # Production container specification
 ├── docker-compose.yml        # Multi-service stack (API, Worker, Redis, Frontend)
 ├── requirements.txt          # Python dependencies
@@ -222,6 +251,12 @@ Flask API Layer
 
 ---
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for branch conventions, test requirements, and PR guidelines.
+
+---
+
 ## License
 
-Apache 2.0. See LICENSE for details.
+Apache 2.0. See [LICENSE](LICENSE) for details.

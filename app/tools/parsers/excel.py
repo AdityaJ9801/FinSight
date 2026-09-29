@@ -11,6 +11,7 @@ from __future__ import annotations
 import openpyxl
 
 from app.tools.parsers import RawRow, RawTable
+from app.tools.parsers.structure import SectionTracker, leading_indent, period_like
 from app.tools.registry import tool
 from app.tools.table_detect import detect_header_row_heuristic
 
@@ -33,42 +34,63 @@ def _build_sheet_table(rows, header_row_idx: int, sheet_name: str) -> RawTable |
     if header_row_idx < 0 or header_row_idx >= len(rows):
         header_row_idx = 0
     header_row = rows[header_row_idx]
-    periods = [str(c.value).strip() for c in header_row[1:] if c.value not in (None, "")]
+    # (column index, period header) for the table currently being read. A later sub-table
+    # header row can replace it (new period columns) or suspend it (non-period columns).
+    active_cols = [(j, str(c.value).strip()) for j, c in enumerate(header_row) if j > 0 and c.value not in (None, "")]
+    periods = [p for _, p in active_cols]
     if not periods:
         return None
 
+    sections = SectionTracker()
     raw_rows: list[RawRow] = []
     for row in rows[header_row_idx + 1:]:
         label_cell = row[0]
         if label_cell.value in (None, ""):
             continue
-        label = str(label_cell.value).strip()
+        raw_label = str(label_cell.value)
+        label = raw_label.strip()
+        try:
+            align_indent = int(label_cell.alignment.indent or 0) if label_cell.alignment else 0
+        except (TypeError, ValueError):
+            align_indent = 0
+        indent = align_indent * 2 + leading_indent(raw_label)
+
+        other_cells = [c.value for c in row[1:] if c.value not in (None, "")]
+        text_cells = [v for v in other_cells if not isinstance(v, (int, float))]
+        if other_cells and len(text_cells) == len(other_cells):
+            # Every value cell is text: a sub-table's own header row. Period columns ->
+            # read the rows below against them; anything else (ageing buckets, coupon /
+            # repayment-term columns, 'Not disclosed') -> skip rows until the next period header.
+            if any(period_like(v) for v in text_cells):
+                active_cols = [(j, str(c.value).strip()) for j, c in enumerate(row)
+                               if j > 0 and c.value not in (None, "") and period_like(c.value)]
+            else:
+                active_cols = []
+            sections.heading(label, indent)
+            continue
+        if not other_cells:
+            sections.heading(raw_label, indent)  # value-less row: a heading for the rows below
+            continue
+        if not active_cols:
+            continue
 
         values: dict[str, float] = {}
-        for j, period in enumerate(periods):
-            if j + 1 >= len(row):
-                break
-            cell = row[j + 1]
-            if cell.value is None:
+        for j, period in active_cols:
+            if j >= len(row) or row[j].value is None:
                 continue
             try:
-                values[period] = float(cell.value)
+                values[period] = float(row[j].value)
             except (TypeError, ValueError):
                 continue
         if not values:
-            continue  # note/footnote-only row, not real data (see csv_tool's equivalent filter)
+            continue
 
-        indent = 0
-        try:
-            indent = int(label_cell.alignment.indent or 0) if label_cell.alignment else 0
-        except (TypeError, ValueError):
-            indent = 0
+        section = sections.data_row(raw_label, indent)
         is_bold = bool(label_cell.font and label_cell.font.bold)
-
         raw_rows.append(RawRow(
             row_idx=label_cell.row, label=label, values=values,
-            is_subtotal=is_bold, indent_level=indent,
-            source_ref={"sheet": sheet_name, "cell": label_cell.coordinate},
+            is_subtotal=is_bold, indent_level=indent, section=section,
+            source_ref={"sheet": sheet_name, "cell": label_cell.coordinate, "label": label, "section": section},
         ))
 
     return RawTable(rows=raw_rows, periods=periods, name=sheet_name) if raw_rows else None

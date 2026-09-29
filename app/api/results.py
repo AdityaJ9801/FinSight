@@ -1,5 +1,3 @@
-import json
-
 from flask import Blueprint, jsonify
 
 from app.api.deps import current_tenant_id
@@ -7,7 +5,7 @@ from app.models.finding import Finding
 from app.models.job import Job
 from app.models.metric import Metric
 from app.models.validation import ValidationResult
-from app.utils import storage
+from app.orchestrator import blackboard
 
 bp = Blueprint("results", __name__)
 
@@ -43,21 +41,31 @@ def get_findings(job_id):
 @bp.get("/<job_id>/charts")
 def get_charts(job_id):
     """Read-only: the same chart images/captions already embedded in the rendered report
-    (ChartSpecAgent writes them to <job_id>/delivery/charts.json), exposed separately so a
+    (ChartSpecAgent publishes them to the job blackboard as `charts`), exposed separately so a
     frontend can show a chart gallery without parsing the report HTML. Empty list (not 404)
     before the delivery stage has run -- "no charts yet" is a normal, expected state, not
     an error."""
     job = _scoped_job(job_id)
     if job is None or job.dataset_version_id is None:
         return jsonify(error="not found"), 404
-    try:
-        charts = json.loads(storage.resolve(f"{job_id}/delivery/charts.json").read_text())
-    except FileNotFoundError:
-        return jsonify([])
+    charts = blackboard.read(job_id, "charts") or []
     return jsonify([{
         "chart_id": c["chart_id"], "title": c["title"], "caption": c.get("caption", ""),
-        "png_base64": c["png_base64"],
+        "png_base64": c["png_base64"], "takeaway": c.get("takeaway", ""), "section_key": c.get("section_key"),
     } for c in charts])
+
+
+@bp.get("/<job_id>/analysis")
+def get_detailed_analysis(job_id):
+    """Detailed statement analysis (YoY/common-size, DuPont, CAGR, profit bridge, net debt,
+    bank flows) from the DetailedAnalyticsAgent. 404 until the analysis stage has run."""
+    job = _scoped_job(job_id)
+    if job is None:
+        return jsonify(error="not found"), 404
+    analysis = blackboard.read(job_id, "detailed_analysis")
+    if analysis is None:
+        return jsonify(error="detailed analysis not produced yet"), 404
+    return jsonify(analysis)
 
 
 @bp.get("/<job_id>/validation")

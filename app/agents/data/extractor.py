@@ -198,6 +198,7 @@ class ExtractorAgent(WorkerAgent):
             rows_payload = [{
                 "row_idx": r.row_idx, "label": r.label, "values": r.values,
                 "is_subtotal": r.is_subtotal, "indent_level": r.indent_level, "source_ref": r.source_ref,
+                "section": getattr(r, "section", ""),
             } for r in table.rows]
             artifact_uri = storage.write_text(
                 f"{spec.job_id}/raw/{doc.id}_{_safe_name(table.name)}.json",

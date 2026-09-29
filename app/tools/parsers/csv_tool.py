@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv as _csv
 
 from app.tools.parsers import RawRow, RawTable
+from app.tools.parsers.structure import SectionTracker, leading_indent, period_like
 from app.tools.registry import tool
 from app.tools.table_detect import detect_header_row_heuristic
 
@@ -39,29 +40,47 @@ def build_table_from_grid(grid: list[list[str]], header_row_idx: int, name: str 
         header_row_idx = 0
     header = grid[header_row_idx]
     periods = [c.strip() for c in header[1:] if c.strip()]
+    active_cols = [(j, c.strip()) for j, c in enumerate(header) if j > 0 and c.strip()]
 
+    def number(cell: str) -> float | None:
+        raw = cell.strip().replace(",", "")
+        if raw.startswith("(") and raw.endswith(")"):  # accounting negative: (1,234)
+            raw = "-" + raw[1:-1]
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+
+    sections = SectionTracker()
     raw_rows: list[RawRow] = []
     for i, row in enumerate(grid[header_row_idx + 1:], start=header_row_idx + 2):
         if not row or not row[0].strip():
             continue
-        label = row[0].strip()
-        values: dict[str, float] = {}
-        for j, period in enumerate(periods):
-            if j + 1 >= len(row):
-                break
-            raw_val = row[j + 1].strip().replace(",", "")
-            if not raw_val:
-                continue
-            try:
-                values[period] = float(raw_val)
-            except ValueError:
-                continue
-        if not values:
-            # A label with no numeric values under any period column is more likely a
-            # footnote/note line than a real data row (design constraint: files carry
-            # trailing metadata too, not just leading).
+        raw_label, label = row[0], row[0].strip()
+        indent = leading_indent(raw_label)
+        others = [c for c in row[1:] if c.strip()]
+        if not others:
+            # A label with no values is a heading (or a footnote); it gives the rows below
+            # their section context.
+            sections.heading(raw_label, indent)
             continue
-        raw_rows.append(RawRow(row_idx=i, label=label, values=values, source_ref={"row": i}))
+        if all(number(c) is None for c in others):
+            # sub-table header: switch to its period columns, or suspend on non-period columns
+            active_cols = [(j, c.strip()) for j, c in enumerate(row) if j > 0 and period_like(c)]
+            sections.heading(label, indent)
+            continue
+        values: dict[str, float] = {}
+        for j, period in active_cols:
+            if j >= len(row):
+                continue
+            v = number(row[j]) if row[j].strip() else None
+            if v is not None:
+                values[period] = v
+        if not values:
+            continue
+        section = sections.data_row(raw_label, indent)
+        raw_rows.append(RawRow(row_idx=i, label=label, values=values, indent_level=indent, section=section,
+                               source_ref={"row": i, "label": label, "section": section}))
 
     return RawTable(rows=raw_rows, periods=periods, name=name)
 

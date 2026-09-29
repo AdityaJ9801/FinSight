@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.agents.base import AgentResult, ArtifactRef, Status, TaskSpec, WorkerAgent
 from app.agents.schemas import ClassificationResult
+from app.domain.coa import detect_unit_scale
 from app.extensions import db
 from app.llm_gateway import prompts
 from app.llm_gateway.prompt_utils import embed_json
@@ -15,6 +16,7 @@ from app.utils import storage
 
 _PREVIEW_HEAD = 20
 _PREVIEW_TAIL = 10
+_VALID_SCALES = {1.0, 1e3, 1e5, 1e6, 1e7, 1e9}
 
 
 def _head_tail_preview(lines: list[str], head: int = _PREVIEW_HEAD, tail: int = _PREVIEW_TAIL) -> str:
@@ -86,7 +88,13 @@ class IntakeAgent(WorkerAgent):
         # against a live model. "other" still gets mapped (see _NEEDS_MAPPING), so this is
         # a safe fallback rather than silently accepting a value nothing else recognizes.
         doc.doc_type = result.doc_type if result.doc_type in DOC_TYPES else "other"
-        doc.unit_scale = result.unit_scale
+        # A unit stated in the document ('(₹ crore)', 'Rs. in lakhs', "INR '000") always wins:
+        # models disagreed on the same workbook (one returned 1, another 10^7), so figures
+        # differed by 10 million-fold between runs. The model's guess is used only when the
+        # document states no unit, and only if it's a real scale.
+        stated = detect_unit_scale(text_excerpt)
+        llm_scale = float(result.unit_scale or 1)
+        doc.unit_scale = stated if stated is not None else (llm_scale if llm_scale in _VALID_SCALES else 1.0)
         doc.currency = result.currency
         for attr, value in (("period_start", result.period_start), ("period_end", result.period_end)):
             if value:
