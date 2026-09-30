@@ -1,10 +1,13 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 from app.api.deps import current_tenant_id
 from app.models.finding import Finding
-from app.models.job import Job
+from app.domain.benchmarks import compare as compare_to_benchmarks
+from app.extensions import db
+from app.models.job import Job, JobProfile
 from app.models.metric import Metric
 from app.models.validation import ValidationResult
+from app.tools.calc.health_score import compute_health_score
 from app.orchestrator import blackboard
 
 bp = Blueprint("results", __name__)
@@ -66,6 +69,49 @@ def get_detailed_analysis(job_id):
     if analysis is None:
         return jsonify(error="detailed analysis not produced yet"), 404
     return jsonify(analysis)
+
+
+@bp.get("/<job_id>/health")
+def get_health(job_id):
+    """The same rules-table health score the insight reasoner and report use, computed
+    over each metric's latest period -- exposed so the UI can show it without parsing the report."""
+    job = _scoped_job(job_id)
+    if job is None or job.dataset_version_id is None:
+        return jsonify(error="not found"), 404
+    latest: dict[str, float] = {}
+    rows = Metric.query.filter_by(dataset_version=job.dataset_version_id).order_by(Metric.period_end).all()
+    for m in rows:
+        if m.value is not None:
+            latest[m.metric_code] = float(m.value)
+    if not latest:
+        return jsonify(error="no metrics yet"), 404
+    score = compute_health_score(latest)
+    if not any(b["included"] for b in score["breakdown"]):
+        # e.g. a bank-statement-only analysis: none of the scored statement ratios exist, and
+        # "0 / 100, Poor" would read as a verdict on the company rather than missing inputs.
+        return jsonify(error="the health score needs balance sheet and P&L ratios"), 404
+    return jsonify(score)
+
+
+@bp.get("/<job_id>/benchmarks")
+def get_benchmarks(job_id):
+    """The job's latest ratios placed against industry quartiles. ?industry= overrides the
+    industry saved on the analysis profile; without either there is nothing to compare to."""
+    job = _scoped_job(job_id)
+    if job is None or job.dataset_version_id is None:
+        return jsonify(error="not found"), 404
+    profile = db.session.get(JobProfile, job_id)
+    industry = request.args.get("industry") or (profile.industry if profile else None)
+    if not industry:
+        return jsonify(error="choose an industry to compare against"), 400
+    latest: dict[str, tuple[str, float, str]] = {}
+    for m in Metric.query.filter_by(dataset_version=job.dataset_version_id).order_by(Metric.period_end).all():
+        if m.value is not None:
+            latest[m.metric_code] = (m.period_end.isoformat(), float(m.value), m.unit)
+    result = compare_to_benchmarks(industry, latest)
+    if result is None:
+        return jsonify(error=f"unknown industry '{industry}'"), 400
+    return jsonify(result)
 
 
 @bp.get("/<job_id>/validation")

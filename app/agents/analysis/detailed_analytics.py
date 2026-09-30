@@ -54,13 +54,14 @@ class DetailedAnalyticsAgent(AnalysisModuleAgent):
     def execute(self, spec: TaskSpec) -> AgentResult:
         dataset_version_id = spec.params["dataset_version_id"]
         facts = load_facts_by_period(dataset_version_id)
-        if not facts:
-            return AgentResult(task_id=spec.task_id, status=Status.PARTIAL, confidence=0.2,
-                               summary="No validated facts yet -- detailed analysis skipped.")
-
         txns = [{"txn_date": t.txn_date.isoformat(), "narration": t.narration, "debit": float(t.debit or 0),
                  "credit": float(t.credit or 0), "balance": float(t.balance) if t.balance is not None else None}
                 for t in BankTransaction.query.filter_by(dataset_version=dataset_version_id).all()]
+        # A bank-statement-only analysis has no statement facts but still gets bank analytics
+        # (monthly flows, top counterparties); only skip when there's nothing at all to analyse.
+        if not facts and not txns:
+            return AgentResult(task_id=spec.task_id, status=Status.PARTIAL, confidence=0.2,
+                               summary="Not applicable: no statement figures or bank transactions to analyse.")
         analysis = self.call_tool("analysis.detailed", facts_by_period=facts, transactions=txns)
         blackboard.write(spec.job_id, "detailed_analysis", analysis)
 

@@ -1,3 +1,12 @@
+# --- Stage 1: build the React frontend (frontend/ -> frontend/dist) ---
+FROM node:22-alpine AS web
+WORKDIR /web
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# --- Stage 2: Python runtime for the API, worker and web server ---
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -14,6 +23,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+COPY --from=web /web/dist ./frontend/dist
 
 ENV FLASK_APP=run.py \
     PYTHONUNBUFFERED=1 \

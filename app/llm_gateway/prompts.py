@@ -205,6 +205,10 @@ QA_ROUTER = (
 QA_COMPOSER = (
     "Compose a direct, clear, professional answer to the user's question using ONLY the provided query results, "
     "document excerpts, chart descriptions, report findings, and DIAGNOSTIC_TREE_JSON (if present).\n"
+    "FACTS_JSON, when present, holds the verified figures for the metrics the question is about: each entry's "
+    "`display`, `prior_display` and `change_display` are already formatted -- quote them exactly, never recompute "
+    "or round them, and lead with the figure that answers the question before explaining it. Use `improved` to say "
+    "whether a change is favourable. Write short paragraphs or bullet points in Markdown, not one block of text.\n"
     "When DIAGNOSTIC_TREE_JSON is provided or when the user asks 'why did X change', 'what caused it', "
     "'what to investigate', or 'what to ask management', structure your response using the Virtual CFO 5-point "
     "reverse-flow diagnostic methodology:\n"

@@ -8,6 +8,7 @@ from app.llm_gateway import prompts
 from app.llm_gateway.prompt_utils import embed_json
 from app.models.bank import BankTransaction
 from app.models.finding import Finding
+from app.tools.calc.bank_metrics import compute_bank_metrics, transactions_as_dicts
 from app.tools.calc.metrics import compute_all, persist_metrics
 
 # Computed directly from facts rather than read from the `metrics` table: risk runs
@@ -15,6 +16,7 @@ from app.tools.calc.metrics import compute_all, persist_metrics
 # output has been persisted yet. Self-contained also means risk scoring still works if
 # another module fails outright.
 _RISK_INPUT_CODES = {"current_ratio", "debt_to_equity", "interest_coverage", "net_profit_margin", "dso"}
+_BANK_RISK_CODES = {"bank_cash_cover_months", "bank_min_balance", "bank_top_payer_share", "bank_negative_month_share"}
 
 
 class RiskAnomalyAgent(WorkerAgent):
@@ -25,20 +27,28 @@ class RiskAnomalyAgent(WorkerAgent):
         dataset_version_id = spec.params["dataset_version_id"]
 
         facts_by_period = load_facts_by_period(dataset_version_id)
-        if not facts_by_period:
+        transactions = BankTransaction.query.filter_by(dataset_version=dataset_version_id).all()
+        if not facts_by_period and not transactions:
             return AgentResult(task_id=spec.task_id, status=Status.PARTIAL,
-                                summary="No facts available yet to score risk.", confidence=0.2)
+                                summary="No statements or bank transactions available to score risk.", confidence=0.2)
 
-        latest_period = max(facts_by_period.keys())
-        all_metrics = compute_all(facts_by_period)
-        latest_values = {
-            m["metric_code"]: m["value"] for m in all_metrics
-            if m["metric_code"] in _RISK_INPUT_CODES and m["period_end"] == latest_period
-        }
+        latest_values: dict[str, float] = {}
+        latest_period = None
+        if facts_by_period:
+            latest_period = max(facts_by_period.keys())
+            latest_values = {
+                m["metric_code"]: m["value"] for m in compute_all(facts_by_period)
+                if m["metric_code"] in _RISK_INPUT_CODES and m["period_end"] == latest_period
+            }
+        if transactions:
+            bank = compute_bank_metrics(transactions_as_dicts(transactions))
+            bank_end = max(m["period_end"] for m in bank)
+            latest_values.update({m["metric_code"]: m["value"] for m in bank
+                                  if m["metric_code"] in _BANK_RISK_CODES and m["period_end"] == bank_end})
+            latest_period = max(latest_period, bank_end) if latest_period else bank_end
 
         risk_result = self.call_tool("risk.score", metrics=latest_values)
 
-        transactions = BankTransaction.query.filter_by(dataset_version=dataset_version_id).all()
         txn_dicts = [{"row_idx": t.id, "narration": t.narration or "", "debit": float(t.debit or 0),
                       "credit": float(t.credit or 0)} for t in transactions]
         anomalies = self.call_tool("anomaly.detect", transactions=txn_dicts) if txn_dicts else []

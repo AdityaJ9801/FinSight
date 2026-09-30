@@ -1,0 +1,74 @@
+/* UX polish pass: summary opinion, attention-first findings, run-log and form refinements,
+   and the Web Interface Guidelines baseline (skip link, touch, overscroll, colour scheme). */
+
+html { color-scheme: light; }
+button, a, summary, label, select, input[type="radio"], input[type="checkbox"] { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.chat-scroll, .dialog, .lightbox, .menu-pop, .rail { overscroll-behavior: contain; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.skip-link { position: absolute; left: 12px; top: -48px; z-index: 100; padding: 8px 12px; border-radius: var(--r-md); background: var(--ink); color: #fff; text-decoration: none; font-weight: 500; }
+.skip-link:focus { top: 12px; }
+.main:focus { outline: none; }
+h2, h3 { scroll-margin-top: 16px; }
+
+/* ---------------------------------------------------------------- summary opinion */
+
+.opinion {
+  padding: 18px 22px 18px 20px; background: var(--sheet); border: 1px solid var(--rule);
+  border-left: 3px solid var(--tick); border-radius: var(--r-md);
+}
+.opinion-watch { border-left-color: #c9922a; }
+.opinion-bad { border-left-color: var(--redink); }
+.opinion-lead { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.35; text-wrap: balance; }
+.opinion-detail { margin-top: 6px; color: var(--ink-2); max-width: 78ch; line-height: 1.55; }
+
+/* ---------------------------------------------------------------- findings */
+
+.all-clear { padding: 14px 16px; border-radius: var(--r-md); background: var(--tick-wash); color: var(--tick-deep); font-size: 13px; }
+.sev-critical { color: var(--redink); font-weight: 500; }
+.notes { margin-top: 14px; }
+.notes > summary {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer; list-style: none;
+  font-size: 13px; font-weight: 500; color: var(--ink-2); padding: 6px 0;
+}
+.notes > summary::-webkit-details-marker { display: none; }
+.notes > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 150ms var(--ease); margin-right: 2px; }
+.notes[open] > summary::before { transform: rotate(45deg); }
+.notes > summary:hover { color: var(--ink); }
+.notes-list { list-style: none; margin: 6px 0 0; padding: 0; border-top: 1px solid var(--rule); }
+.notes-list li { display: grid; gap: 2px; padding: 10px 0; border-bottom: 1px solid var(--rule-soft); }
+.note-title { font-size: 13px; font-weight: 500; }
+.note-body { font-size: 13px; color: var(--ink-2); line-height: 1.5; }
+
+/* ---------------------------------------------------------------- tables */
+
+.trend-col { width: 108px; }
+.check-name { display: block; font-weight: 500; }
+.spread td .muted { color: var(--faint); }
+
+/* ---------------------------------------------------------------- new analysis */
+
+.drop { cursor: pointer; }
+.plan-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.plan-steps li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; }
+.plan-steps .plan-stage-name { margin: 0 0 2px; }
+.plan-steps .plan-does { font-size: 12px; line-height: 1.5; }
+.plan-note { font-size: 12px; color: var(--graphite); line-height: 1.55; padding-top: 14px; border-top: 1px solid var(--rule); }
+
+/* ---------------------------------------------------------------- rail */
+
+.rail-job { display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; }
+.rail-job-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-job-when { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------- responsive fixes */
+
+.section-head { flex-wrap: wrap; }
+.inline-select select { max-width: 100%; }
+@media (max-width: 860px) {
+  .inline-select { width: 100%; }
+  .inline-select select { flex: 1; }
+  .opinion { padding: 16px; }
+  .opinion-lead { font-size: 16px; }
+}
+
+.check { white-space: nowrap; }

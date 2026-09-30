@@ -9,3 +9,6 @@ instance/
 .gitignore
 .pytest_cache/
 *.db
+frontend/node_modules/
+frontend/dist/
+.claude/

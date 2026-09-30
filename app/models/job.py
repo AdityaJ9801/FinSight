@@ -89,3 +89,18 @@ class JobInstruction(db.Model):
     orchestrator_note = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     applied_at = db.Column(db.DateTime, nullable=True)
+
+
+class JobProfile(db.Model):
+    """Who an analysis is about: the company name and industry used to label it in
+    comparisons and to pick peer benchmarks. A separate table (not new columns on `jobs`) so
+    existing databases pick it up through `flask init-db`'s create_all without a migration."""
+
+    __tablename__ = "job_profiles"
+
+    job_id = db.Column(db.String(36), db.ForeignKey("jobs.id"), primary_key=True)
+    company_name = db.Column(db.String(255), nullable=True)
+    industry = db.Column(db.String(60), nullable=True)  # key into app/domain/benchmarks.py
+    updated_at = db.Column(
+        db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+    )

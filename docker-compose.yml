@@ -50,13 +50,14 @@ services:
       init:
         condition: service_completed_successfully
 
-  # Web frontend (frontend/), served as static files by FastAPI/Uvicorn.
-  # Its JS calls the Flask API directly from the browser at http://localhost:5000/api
-  # (see frontend/app.js's API_BASE) -- not http://api:5000, which only resolves inside
-  # this Docker network, not from the host browser.
+  # Web frontend: the React build (frontend/dist, compiled in the Dockerfile's node stage)
+  # served by FastAPI/Uvicorn, which also proxies /api/* to the Flask API over the Docker
+  # network -- so the browser only ever talks to http://localhost:8080.
   frontend:
     build: .
     command: uvicorn frontend_server:app --host 0.0.0.0 --port 8080
+    environment:
+      FINSIGHT_API_URL: http://api:5000
     ports:
       - "8080:8080"
     depends_on:

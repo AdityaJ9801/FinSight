@@ -7,6 +7,7 @@ it fills in.
 """
 from __future__ import annotations
 
+import re
 from typing import Type, TypeVar
 
 from pydantic import BaseModel
@@ -115,18 +116,94 @@ def _map_labels(text: str) -> list[dict]:
     return out
 
 
+_MONTHLY_BANK = {"bank_inflows", "bank_outflows", "bank_net_flow"}
+
+
+def _bank_rule_findings(by_code: dict[str, list[dict]]) -> list[dict]:
+    """Threshold findings on the statement-level bank metrics (calc/bank_metrics.py), phrased
+    the way a credit analyst would flag them. Values are only compared, never printed."""
+    def latest(code):
+        points = by_code.get(code)
+        return sorted(points, key=lambda p: p["period_end"])[-1] if points else None
+
+    out = []
+    cover, payer = latest("bank_cash_cover_months"), latest("bank_top_payer_share")
+    low, neg = latest("bank_min_balance"), latest("bank_negative_month_share")
+    def ref(code: str, m: dict) -> str:
+        return "{{m:" + code + ":" + m["period_end"] + "}}"
+
+    if cover and cover.get("value") is not None:
+        thin = cover["value"] < 1.0
+        out.append({"title": "Cash cover is thin" if thin else "Cash cover is comfortable",
+                    "body": f"The closing balance covers {ref('bank_cash_cover_months', cover)} of typical monthly outflows"
+                            + ("; a single slow month could strain payments." if thin else "."),
+                    "severity": "warn" if thin else "info", "metric_ids": [cover.get("id", "")]})
+    if payer and payer.get("value") is not None and payer["value"] > 0.4:
+        out.append({"title": "Receipts depend heavily on one payer",
+                    "body": f"The largest payer accounts for {ref('bank_top_payer_share', payer)} of all money received. Losing or delaying "
+                            f"that customer would hit cash flow directly; check contract terms and ageing.",
+                    "severity": "warn" if payer["value"] > 0.5 else "info", "metric_ids": [payer.get("id", "")]})
+    if low and low.get("value") is not None and low["value"] < 0:
+        out.append({"title": "The account went overdrawn",
+                    "body": f"The balance fell to {ref('bank_min_balance', low)} at its lowest point in the statement period.",
+                    "severity": "error", "metric_ids": [low.get("id", "")]})
+    if neg and neg.get("value") is not None and neg["value"] >= 0.5:
+        out.append({"title": "Outflows beat inflows in most months",
+                    "body": f"{ref('bank_negative_month_share', neg)} of months were cash-negative across the statement period.",
+                    "severity": "warn", "metric_ids": [neg.get("id", "")]})
+    return out
+
+
 def _generic_findings(text: str) -> list[dict]:
+    """Deterministic stand-in for an analysis module's findings: reports the largest
+    period-on-period moves (favourable or not) using {{m:code:period}} bindings only, the
+    same contract the real prompt (prompts.ANALYSIS_MODULE) imposes -- never raw numbers."""
+    from app.domain.metric_facts import LABELS, LOWER_IS_BETTER
+
     metrics = extract_json("METRICS_JSON", text) or []
-    findings = []
-    for m in metrics[:3]:
-        code = m.get("metric_code") or m.get("code") or "metric"
-        period = m.get("period_end", "")
+    by_code: dict[str, list[dict]] = {}
+    for m in metrics:
+        code = m.get("metric_code") or m.get("code")
+        # Month-to-month swings in bank flows are noise; the statement-level summaries carry the signal.
+        if code and m.get("period_end") and code not in _MONTHLY_BANK:
+            by_code.setdefault(code, []).append(m)
+
+    findings = _bank_rule_findings(by_code)
+
+    moves = []
+    for code, points in by_code.items():
+        points = sorted(points, key=lambda p: p["period_end"])
+        cur, prev = points[-1], points[-2] if len(points) > 1 else None
+        if prev is None or cur.get("value") is None or prev.get("value") in (None, 0):
+            continue
+        rel = (cur["value"] - prev["value"]) / abs(prev["value"])
+        moves.append((abs(rel), rel, code, cur, prev))
+    moves.sort(reverse=True)
+
+    for magnitude, rel, code, cur, prev in moves[:4]:
+        if magnitude < 0.02:
+            continue
+        name = LABELS.get(code, code.replace("_", " "))
+        favourable = (rel < 0) if code in LOWER_IS_BETTER else (rel > 0)
+        verb = ("improved" if favourable else "deteriorated") if code not in LOWER_IS_BETTER else \
+               ("fell" if rel < 0 else "rose")
         findings.append({
-            "title": f"{code.replace('_', ' ').title()} observation",
-            "body": f"{{{{m:{code}:{period}}}}} was computed for the period; review against prior periods.",
-            "severity": "info",
-            "metric_ids": [m.get("id", code)],
+            "title": f"{name} {verb}",
+            "body": (f"{name} moved to {{{{m:{code}:{cur['period_end']}}}}} from "
+                     f"{{{{m:{code}:{prev['period_end']}}}}}"
+                     + ("." if favourable else "; understand the driver before relying on the trend.")),
+            "severity": "info" if favourable or magnitude < 0.1 else "warn",
+            "metric_ids": [cur.get("id", code), prev.get("id", code)],
         })
+    if not findings:
+        for code, points in list(by_code.items())[:2]:
+            cur = sorted(points, key=lambda p: p["period_end"])[-1]
+            name = LABELS.get(code, code.replace("_", " "))
+            findings.append({
+                "title": f"{name} for the latest period",
+                "body": f"{name} stands at {{{{m:{code}:{cur['period_end']}}}}}; there is no earlier period to compare against.",
+                "severity": "info", "metric_ids": [cur.get("id", code)],
+            })
     return findings
 
 
@@ -240,74 +317,145 @@ def _assistant_decision(text: str) -> dict:
     """Deterministic stand-in: picks the first offered agent, no clarification -- good
     enough to exercise the full assistant endpoint -> agent-run path in tests without
     depending on real LLM judgment calls."""
+    from app.domain.chat_intent import hinted_agent
+
     agents = extract_json("AVAILABLE_AGENTS_JSON", text) or []
     if not agents:
         return {"needs_clarification": False, "chosen_agent": "", "action_note": ""}
+    message = (extract_json("USER_MESSAGE_JSON", text) or {}).get("message", "")
+    names = [a.get("agent", "") for a in agents]
+    chosen = hinted_agent(message, names) or names[0]
     return {
-        "needs_clarification": False, "chosen_agent": agents[0].get("agent", ""),
-        "action_note": "Re-run requested via chat.", "options": [],
+        "needs_clarification": False, "chosen_agent": chosen,
+        "action_note": message or "Re-run requested via chat.", "options": [],
     }
 
 
+def _period_label(iso: str) -> str:
+    """'2024-03-31' -> 'FY24' (Indian fiscal year end); other dates -> 'Jan 2024'."""
+    import calendar
+    from datetime import date
+
+    try:
+        d = date.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return iso or ""
+    if d.month == 3 and d.day == 31:
+        return f"FY{str(d.year)[2:]}"
+    return f"{calendar.month_abbr[d.month]} {d.year}"
+
+
+_ACRONYMS = ("COGS", "SG&A", "D&A", "EBITDA", "EBIT", "PAT", "PBT", "GST", "ITC", "OCF", "CAPEX", "R&D", "ROE", "ROCE")
+
+
+def _sentence_case(text: str) -> str:
+    """The diagnostic knowledge base writes component names partly in capitals ("GROSS MARGIN
+    DRIVERS (Revenue & COGS)"); lower-case the shouted words but keep real acronyms."""
+    if not text:
+        return text
+
+    def fix(match: re.Match) -> str:
+        word = match.group(0)
+        return word if word in _ACRONYMS or len(word) <= 2 else word.lower()
+
+    out = re.sub(r"[A-Z][A-Z&-]+", fix, text)
+    return out[:1].upper() + out[1:]
+
+
+def _fact_sentence(f: dict) -> str:
+    line = f"**{f['metric']}** is {f['display']} for {_period_label(f['period'])}"
+    if f.get("prior_display"):
+        moved = {"up": "up from", "down": "down from", "flat": "unchanged from"}[f.get("direction", "flat")]
+        line += f", {moved} {f['prior_display']} in {_period_label(f['prior_period'])}"
+        if f.get("direction") != "flat":
+            line += f" ({f['change_display']})"
+        if f.get("improved") is True:
+            line += ", a favourable move"
+        elif f.get("improved") is False:
+            line += ", an unfavourable move"
+    return line + "."
+
+
 def _qa_answer(text: str) -> dict:
+    """Deterministic stand-in for the QA composer, following the same rules the real prompt
+    gives the model (prompts.QA_COMPOSER): lead with the verified figures in FACTS_JSON,
+    then the diagnostic drill-down for "why" questions, then what the analysis flagged."""
+    facts = extract_json("FACTS_JSON", text) or []
     charts = extract_json("CHARTS_JSON", text) or []
     report = extract_json("REPORT_JSON", text) or []
     rows = extract_json("ROWS_JSON", text) or []
     chunks = extract_json("CHUNKS_JSON", text) or []
     diagnostic = extract_json("DIAGNOSTIC_TREE_JSON", text)
+    import re
 
-    text_low = text.lower()
+    match = re.search(r"^Question:(.*)$", text, re.MULTILINE)
+    question = match.group(1).strip() if match else ""
+    q_low = question.lower()
 
-    # Prioritize chart answer if charts exist and question asks about a chart
-    if charts and any(k in text_low for k in ("chart", "graph", "plot", "visual")):
-        title = charts[0].get("title", "Financial Chart")
-        caption = charts[0].get("caption", "trend across reporting periods")
-        return {
-            "answer": f"The '{title}' visualization shows: {caption}.",
-            "citations": [charts[0].get("chart_id", "chart_1")],
-        }
+    if charts and any(k in q_low for k in ("chart", "graph", "plot", "visual")):
+        lines = [f"- **{c.get('title', 'Chart')}**: {c.get('caption') or 'trend across the reporting periods'}"
+                 for c in charts[:4]]
+        return {"answer": "Here is what the charts show:\n\n" + "\n".join(lines),
+                "citations": [c.get("chart_id", "") for c in charts[:4]]}
 
-    # Virtual CFO diagnostic reverse flow
-    is_diagnostic_q = any(
-        k in text_low for k in ("why", "cause", "investigat", "driver", "root cause", "management questions", "what changed", "reverse flow", "action point")
-    )
+    parts: list[str] = []
+    citations: list[str] = []
 
-    if diagnostic and (is_diagnostic_q or not (rows or report or chunks)):
-        cname = diagnostic.get("canonical_name", "Metric")
-        formula = diagnostic.get("formula", "")
-        what_changed = diagnostic.get("what_changed", "")
-        why = ", ".join(diagnostic.get("why_did_it_change", []))
-        causes = [f"{rc.get('name')}: {rc.get('root_cause')}" for rc in diagnostic.get("what_caused_it", [])[:3]]
-        causes_str = " | ".join(causes) if causes else "operational cost variances"
-        inv = "; ".join(diagnostic.get("what_to_investigate", [])[:3])
-        questions = "\n".join(f"- {q}" for q in diagnostic.get("what_to_ask_management", [])[:3])
+    is_why = any(k in q_low for k in ("why", "cause", "driver", "explain", "what changed", "reason", "investigat",
+                                      "ask management"))
+    if diagnostic and (is_why or not facts):
+        # The Virtual CFO five-point reverse flow, with step 1 anchored in the actual figures.
+        name = diagnostic.get("canonical_name", "this metric")
+        components = [_sentence_case(c) for c in (diagnostic.get("why_did_it_change") or [])]
+        causes = [f"{rc.get('name')}: {rc.get('root_cause')}" for rc in (diagnostic.get("what_caused_it") or [])[:3]]
+        checks = (diagnostic.get("what_to_investigate") or [])[:3]
+        asks = (diagnostic.get("what_to_ask_management") or [])[:3]
+        changed = " ".join(_fact_sentence(f) for f in facts[:2]) or diagnostic.get("what_changed", "")
+        if diagnostic.get("formula"):
+            changed += f" It is calculated as {diagnostic['formula']}."
+        steps = [f"**Virtual CFO diagnostic: {name}**", f"**1. What changed**\n{changed.strip()}"]
+        steps.append("**2. Why it changed**\n" + (", ".join(components[:4]) + "." if components
+                                                   else "The governing components are not broken out in this data."))
+        steps.append("**3. What caused it**\n" + ("\n".join(f"- {c}" for c in causes) if causes
+                                                   else "- No specific root cause can be isolated from the statements."))
+        steps.append("**4. What to investigate**\n" + "\n".join(f"- {c}" for c in checks))
+        steps.append("**5. What to ask management**\n" + "\n".join(f"- {q}" for q in asks))
+        parts.append("\n\n".join(steps))
+        citations += [f["metric_code"] for f in facts[:2]] + [diagnostic.get("metric_code", "virtual_cfo_compendium")]
+    elif facts:
+        shown = facts[:5]
+        parts.append("\n".join(f"- {_fact_sentence(f)}" for f in shown) if len(shown) > 1 else _fact_sentence(shown[0]))
+        moved = [f for f in shown if f.get("improved") is not None]
+        if len(moved) > 1:
+            worse = sum(1 for f in moved if f["improved"] is False)
+            verdict = ("all moved favourably" if worse == 0 else "all moved unfavourably" if worse == len(moved)
+                       else f"{worse} of {len(moved)} moved unfavourably, so the picture is mixed")
+            parts.append(f"**On balance:** of the measures that changed, {verdict}.")
+        citations += [f["metric_code"] for f in shown]
 
-        answer = (
-            f"Virtual CFO Reverse-Flow Diagnostic for {cname}:\n"
-            f"Formula: {formula}\n\n"
-            f"1. What changed: {what_changed}\n"
-            f"2. Why it changed (Governing components): {why}\n"
-            f"3. What caused it (Root causes): {causes_str}\n"
-            f"4. What to investigate: {inv}\n"
-            f"5. What to ask management:\n{questions}"
-        )
-        return {"answer": answer, "citations": [diagnostic.get("metric_code", "virtual_cfo_compendium")]}
-        caption = charts[0].get("caption", "trend across reporting periods")
-        return {
-            "answer": f"The '{title}' visualization shows: {caption}.",
-            "citations": [charts[0].get("chart_id", "chart_1")],
-        }
-    if rows:
-        preview = "; ".join(str(r) for r in rows[:3])
-        return {"answer": f"Based on the ledger: {preview}.", "citations": [f"query_result:{i}" for i in range(len(rows[:3]))]}
-    if chunks:
-        preview = " ".join(str(c.get("text", ""))[:200] for c in chunks[:2])
-        return {"answer": preview or "No matching content found.", "citations": [c.get("id", "") for c in chunks[:2]]}
     if report:
-        title = report[0].get("title", "Report observation")
-        body = report[0].get("body", "financial observations")
-        return {"answer": f"Per the analysis report: {title} - {body}.", "citations": ["report_findings"]}
-    return {"answer": "I could not find data to answer this question.", "citations": []}
+        rank = {"error": 0, "warn": 1, "info": 2}
+        flagged = sorted(report, key=lambda r: rank.get(r.get("severity"), 3))[:4]
+        label = {"error": "Critical", "warn": "Watch", "info": "Note"}
+        lines = [f"- **{label.get(r.get('severity'), 'Note')}: {r.get('title', 'Finding')}.** {r.get('body') or ''}".rstrip()
+                 for r in flagged]
+        parts.append("**What the analysis flagged**\n" + "\n".join(lines))
+        citations.append("report_findings")
+
+    if not parts and rows:
+        lines = [f"- {r.get('metric_code', 'value')} ({r.get('period_end', '')}): {r.get('value')}" for r in rows[:6]]
+        parts.append("From the computed metrics:\n" + "\n".join(lines))
+        citations += [f"query_result:{i}" for i in range(min(len(rows), 6))]
+    if not parts and chunks:
+        parts.append(" ".join(str(c.get("text", ""))[:300] for c in chunks[:2]))
+        citations += [c.get("id", "") for c in chunks[:2]]
+
+    if not parts:
+        return {"answer": ("I couldn't find figures in this analysis that answer that. I can answer questions about "
+                           "specific ratios (for example margins, liquidity, leverage, working capital or cash), explain "
+                           "why a ratio moved, summarise the risks the analysis flagged, or re-run a module with new "
+                           "assumptions."), "citations": []}
+    return {"answer": "\n\n".join(parts), "citations": citations}
 
 
 def _generic_instance(schema: Type[T]) -> T:

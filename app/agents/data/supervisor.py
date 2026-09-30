@@ -15,7 +15,9 @@ from app.agents.data.mapper import SchemaMapperAgent
 from app.agents.data.reconciler import ReconcilerAgent
 from app.domain.validation_rules import within_materiality
 from app.extensions import db
+from app.models.bank import BankTransaction
 from app.models.dataset import FinancialFact
+from app.models.gst import GstReturn
 from app.models.document import Document
 from app.models.review import ReviewItem
 from app.utils.ids import new_id
@@ -139,20 +141,35 @@ class DataSupervisor:
                          "explanation": failed.get("explanation")},
             ))
 
-        # An empty dataset must never silently "validate" -- with zero facts,
-        # run_statement_checks() iterates nothing and every check trivially reports no
-        # failures (caught against a live model whose intake classifier produced doc_type
-        # values the mapper's _NEEDS_MAPPING set didn't recognize, so no document ever
-        # reached the mapper at all). Treat it the same as a reconciliation failure.
-        fact_count = FinancialFact.query.filter_by(dataset_version=dataset_version_id).count()
-        if fact_count == 0 and not any(ri.kind == "reconciliation" and ri.payload.get("check_code") == "NO_FACTS"
-                                        for ri in review_items):
-            review_items.append(ReviewItem(
-                id=new_id("rev_"), job_id=job.id, kind="reconciliation",
-                payload={"check_code": "NO_FACTS", "expected": None, "actual": 0, "diff": None,
-                         "explanation": "No financial facts were extracted from any document -- check that "
-                                        "document classification and mapping produced usable data."},
-            ))
+        # An empty dataset must never silently "validate" -- with no data, run_statement_checks()
+        # iterates nothing and every check trivially passes (caught live when an intake
+        # misclassification meant no document ever reached the mapper). "Usable data" is any
+        # of the three things the analysis modules can work from: statement facts, bank
+        # transactions (cash_wc/risk, see calc/bank_metrics.py) or GST returns (gst). Counting
+        # facts alone blocked every bank-statement-only analysis at this gate forever.
+        usable_rows = (
+            FinancialFact.query.filter_by(dataset_version=dataset_version_id).count()
+            + BankTransaction.query.filter_by(dataset_version=dataset_version_id).count()
+            + GstReturn.query.filter_by(dataset_version=dataset_version_id).count()
+        )
+        if usable_rows == 0:
+            if "NO_FACTS" in accepted_checks:
+                # A reviewer already acknowledged this and re-running changed nothing, so
+                # waiting for another review would loop forever. Stop with a clear reason.
+                job.status = "FAILED"
+                job.error = ("No usable financial data could be read from the uploaded files. Add a balance "
+                             "sheet, P&L, bank statement or GST return in CSV, Excel or text-based PDF.")
+                job.set_progress(65, "No usable data in the uploaded files")
+                db.session.commit()
+                return False
+            if not any(ri.kind == "reconciliation" and ri.payload.get("check_code") == "NO_FACTS" for ri in review_items):
+                review_items.append(ReviewItem(
+                    id=new_id("rev_"), job_id=job.id, kind="reconciliation",
+                    payload={"check_code": "NO_FACTS", "expected": None, "actual": 0, "diff": None,
+                             "explanation": "No usable figures were read from any document: no statement line "
+                                            "items, bank transactions or GST returns. Check that the files are "
+                                            "financial statements and that scanned PDFs have a text layer."},
+                ))
 
         # Distinguish hard reconciliation blockers (e.g. NO_FACTS or check failures)
         # from informational low-confidence mapping gaps.

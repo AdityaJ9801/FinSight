@@ -46,6 +46,8 @@ def format_indian_number(value: float, unit: str | None, scale: float | None = N
         return f"{value:.0f} days"
     if unit == "x":
         return f"{value:.2f}x"
+    if unit == "months":
+        return f"{value:.1f} months"
     if unit in (None, "INR"):
         return format_money(value, scale)
 

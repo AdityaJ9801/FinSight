@@ -8,7 +8,7 @@
 FinSight is an end-to-end, multi-agent financial analysis platform that ingests unstructured and structured corporate financial documents (P&L, Balance Sheet, Cash Flow Statement, Bank Statements, and GST Returns) in Excel/CSV/PDF formats — including multi-sheet workbooks and files with metadata headers — extracts and reconciles them into an immutable ledger, computes standardized financial ratios, executes ML anomaly/risk/forecast analysis, and generates publication-grade executive reports with interleaved visualizations and an interactive Virtual CFO diagnostic Q&A assistant.
 
 Two interfaces access the Flask API over HTTP:
-1. **Interactive Web Application** (`frontend/`, served by `frontend_server.py` at `http://localhost:8080`): A zero-build, responsive web application for document upload, real-time agent execution tracking, human-in-the-loop review & approval, interactive report reading with embedded charts, and multi-turn Virtual CFO chat.
+1. **Web Application** (`frontend/`, React + TypeScript + Vite; served by `frontend_server.py` at `http://localhost:8080`, which also proxies `/api` to Flask): upload, a live run log of every agent, human-in-the-loop review, an overview with a summary opinion, key ratios, health rating, peer benchmarks and findings, the verified report, charts, detailed statement analysis, side-by-side comparison of analyses, and a chat panel that guides a running analysis or answers questions about a finished one.
 2. **RESTful API** (`app/api/` at `http://localhost:5000/api`): Comprehensive endpoints for automated workflows, agent steering, job control, and data export.
 
 **No login required for local execution.** Designed as a direct application where all requests resolve to a default tenant/entity (`app/utils/default_tenant.py`), while preserving multi-tenant database schemas under the hood.
@@ -110,8 +110,11 @@ celery -A app.workers.celery_app worker --pool=solo -l info
 python run.py
 
 # Terminal 3: Web Application Frontend
+cd frontend; npm ci; npm run build; cd ..
 uvicorn frontend_server:app --port 8080
 ```
+
+**Frontend development** (hot reload, proxies `/api` to Flask on :5000): `cd frontend && npm run dev`, then open `http://localhost:5173`.
 
 Open `http://localhost:8080` to access the application.
 
@@ -137,7 +140,10 @@ docker compose run --rm api python -m pytest
 
 ```
 # Jobs & Execution
-POST   /api/jobs                         Create job and upload financial documents
+GET    /api/jobs                         List jobs, newest first, with document counts and company profile
+POST   /api/jobs                         Create job and upload financial documents (optional company_name, industry)
+POST   /api/jobs/<job_id>/documents      Add statements to a finished analysis; re-runs it into a new dataset version
+PUT    /api/jobs/<job_id>/profile        Set the company name and industry (used for comparison and benchmarks)
 GET    /api/jobs/<job_id>                Get job execution status and stage progress
 GET    /api/jobs/<job_id>/tasks          Per-agent execution trace (timing, confidence, status)
 POST   /api/jobs/<job_id>/instructions   Mid-run steering instruction for upcoming stage
@@ -147,6 +153,9 @@ DELETE /api/jobs/<job_id>                Delete job and all associated facts, re
 # Financial Results & Artifacts
 GET    /api/jobs/<job_id>/metrics        Computed financial ratios and time-series
 GET    /api/jobs/<job_id>/findings       Analysis findings across Ratio, Cash/WC, Forecast, Risk, GST
+GET    /api/jobs/<job_id>/health         Rules-based health score over each metric's latest period
+GET    /api/jobs/<job_id>/benchmarks     Latest ratios placed in industry quartiles (?industry= to override)
+GET    /api/benchmarks/industries        Industries with benchmark data, and the data source
 GET    /api/jobs/<job_id>/charts         Visual chart specifications and PNG images
 GET    /api/jobs/<job_id>/report         Rendered executive report (format=html|docx|pdf)
 
@@ -167,6 +176,25 @@ POST   /api/llm/config                   Update LLM backend and API keys at runt
 ```
 
 ---
+
+## Peer Benchmarks
+
+`app/domain/benchmarks.py` ships **indicative** quartile ranges (p25 / median / p75) for ten Indian sectors so
+the feature works out of the box. They are not a licensed dataset. To use your own (for example CMIE Prowess, or
+an internal loan-book study), point `BENCHMARKS_FILE` at a JSON file of the same shape; it replaces the built-in
+table and its `source` / `as_of` are shown in the UI:
+
+```json
+{"source": "CMIE Prowess", "as_of": "FY2024",
+ "industries": {"manufacturing": {"label": "Manufacturing", "metrics": {"current_ratio": [1.1, 1.45, 1.9]}}}}
+```
+
+Percentage ratios are fractions (`0.12` = 12%), coverage ratios are multiples, and working-capital metrics are days.
+
+## Upgrading an Existing Database
+
+Run `flask init-db` once after pulling (it only creates what's missing, so it's safe on existing data). The API also
+creates the `job_profiles` table on startup if it's missing.
 
 ## Switching LLM Providers
 
@@ -239,8 +267,8 @@ Flask API Layer
 │   ├── orchestrator/         # Stage coordinator, DAG executor, blackboard, gates, instruction steering
 │   ├── tools/                # Deterministic tools (parsers, metrics, detailed analysis, ML, renderers)
 │   └── workers/              # Celery application and task definitions
-├── frontend/                 # Responsive web application (HTML/CSS/JS)
-├── frontend_server.py        # Static web server (FastAPI/Uvicorn)
+├── frontend/                 # Web application (React + TypeScript + Vite)
+├── frontend_server.py        # Serves frontend/dist and proxies /api to Flask (FastAPI/Uvicorn)
 ├── seed/                     # Sample data (P&L, Balance Sheet, Cash Flow, Multi-sheet Excel)
 ├── tests/                    # 89 automated unit and integration tests
 ├── Dockerfile                # Production container specification

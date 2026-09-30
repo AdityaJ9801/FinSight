@@ -5,6 +5,8 @@ than free-form SQL generation -- see that module's docstring for why.
 """
 from __future__ import annotations
 
+import re
+
 from app.agents.base import AgentResult, ArtifactRef, Status, TaskSpec, WorkerAgent
 from app.agents.schemas import QAAnswerResult, RouteDecision
 from app.extensions import db
@@ -15,7 +17,12 @@ from app.models.document import Document
 from app.domain.financial_intelligence import build_cfo_diagnostic_trace, resolve_metric_tree
 from app.models.finding import Finding
 from app.tools.calc.metrics import REGISTRY
+from app.domain.metric_facts import build_facts, match_metrics
 from app.orchestrator import blackboard
+from app.tools.report_render import resolve_placeholders
+
+_CONCERN_WORDS = re.compile(r"\b(risk|concern|worr|issue|problem|red flag|weak|lender|credit|flag|finding|anomal)", re.I)
+_SEVERITY_RANK = {"error": 0, "warn": 1, "info": 2}
 
 _CONVERSATIONAL_WORDS = {
     "ok", "okay", "thanks", "thank you", "great", "got it", "understood",
@@ -143,7 +150,23 @@ class QAAgent(WorkerAgent):
             if all_charts:
                 charts_data = [{"chart_id": c.get("chart_id"), "title": c.get("title"), "caption": c.get("caption", "")} for c in all_charts[:4]]
 
+        # Verified figures for whatever the question is about, pre-computed (value, prior
+        # period, change, direction) so the composer phrases numbers instead of deriving them.
+        fact_codes = match_metrics(question)
+        if matched_tree and matched_tree.metric_code not in fact_codes:
+            fact_codes.insert(0, matched_tree.metric_code)
+        facts = build_facts(dataset_version_id, fact_codes)
+
+        # Questions about risks/concerns need what the analysis actually flagged, whichever
+        # route the router picked.
+        if not report_data and _CONCERN_WORDS.search(question):
+            findings = Finding.query.filter_by(dataset_version=dataset_version_id).all()
+            report_data = [{"module": f.module, "title": f.title, "body": f.body, "severity": f.severity}
+                           for f in sorted(findings, key=lambda f: _SEVERITY_RANK.get(f.severity, 3))[:8]]
+
         prompt_content = f"Question: {question}"
+        if facts:
+            prompt_content += "\n" + embed_json("FACTS_JSON", facts)
         if rows:
             prompt_content += "\n" + embed_json("ROWS_JSON", rows)
         if chunks:
@@ -169,7 +192,9 @@ class QAAgent(WorkerAgent):
             {"role": "user", "content": prompt_content},
         ]
         result: QAAnswerResult = self.call_llm(compose_prompt, schema=QAAnswerResult, tier="reasoning")
-        return {"answer": result.answer, "citations": result.citations, "route": route.route}
+        # Findings and insights carry {{m:code:period}} bindings; never show them raw.
+        answer, _ = resolve_placeholders(result.answer, dataset_version_id)
+        return {"answer": answer, "citations": result.citations, "route": route.route}
 
     def execute(self, spec: TaskSpec) -> AgentResult:
         result = self.answer(spec.tenant_id, spec.params["dataset_version_id"], spec.params["question"])

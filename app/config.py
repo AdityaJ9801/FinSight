@@ -20,7 +20,13 @@ class Config:
         "pool_pre_ping": True,
     }
 
-    STORAGE_ROOT = Path(os.environ.get("STORAGE_ROOT", BASE_DIR / "instance" / "storage"))
+    # Always absolute. A relative value (the .env example's "instance/storage") used to be
+    # resolved against the process working directory when files were written, but against
+    # the `app/` package folder by Flask's send_file when they were served -- so every
+    # report download 404'd with "file not found" once a .env existed.
+    STORAGE_ROOT = Path(os.environ.get("STORAGE_ROOT", "") or BASE_DIR / "instance" / "storage")
+    if not STORAGE_ROOT.is_absolute():
+        STORAGE_ROOT = BASE_DIR / STORAGE_ROOT
 
     CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
     CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")

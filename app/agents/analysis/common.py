@@ -48,7 +48,7 @@ class AnalysisModuleAgent(WorkerAgent):
         if not metric_rows:
             return AgentResult(
                 task_id=spec.task_id, status=Status.PARTIAL,
-                summary=f"No {self.module_label} metrics could be computed (required accounts not present).",
+                summary="Not applicable: the uploaded statements don't include the accounts these ratios need.",
                 confidence=0.3,
             )
 
@@ -67,8 +67,8 @@ class AnalysisModuleAgent(WorkerAgent):
             task_id=spec.task_id, status=Status.DONE,
             outputs=[ArtifactRef(id=dataset_version_id, kind="metric_set", uri="db://metrics",
                                   row_count=len(metric_rows))],
-            summary=f"{self.module_label}: computed {len(metric_rows)} metric points, "
-                    f"{len(findings_set.findings)} findings.",
+            summary=f"Computed {len(metric_rows)} figures and raised "
+                    f"{len(findings_set.findings)} finding{'' if len(findings_set.findings) == 1 else 's'}.",
             confidence=0.85,
         )
 

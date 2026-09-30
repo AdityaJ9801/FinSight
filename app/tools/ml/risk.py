@@ -30,6 +30,20 @@ def score_risk(metrics: dict[str, float]) -> dict:
     if "dso" in metrics:
         add("dso", 10, metrics["dso"] > 90, "Slow receivables collection (DSO > 90 days)")
 
+    # Bank-statement signals (see calc/bank_metrics.py) -- the only inputs available when an
+    # analysis has bank statements but no balance sheet or P&L.
+    if "bank_cash_cover_months" in metrics:
+        add("bank_cash_cover_months", 25, metrics["bank_cash_cover_months"] < 1.0,
+            "Closing balance covers less than one month of typical outflows")
+    if "bank_min_balance" in metrics:
+        add("bank_min_balance", 20, metrics["bank_min_balance"] < 0, "Account went overdrawn during the period")
+    if "bank_top_payer_share" in metrics:
+        add("bank_top_payer_share", 15, metrics["bank_top_payer_share"] > 0.5,
+            "Over half of receipts come from a single payer")
+    if "bank_negative_month_share" in metrics:
+        add("bank_negative_month_share", 15, metrics["bank_negative_month_share"] > 0.5,
+            "Outflows exceeded inflows in most months")
+
     score = round(100 * risk_points / max_points) if max_points else 0
     if score >= 70:
         band = "high"
