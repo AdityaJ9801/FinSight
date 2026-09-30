@@ -12,9 +12,10 @@ Thank you for your interest in contributing! FinSight is an open project and wel
    python -m venv .venv
    .venv\Scripts\activate          # Windows
    # source .venv/bin/activate     # macOS / Linux
+   cd backend
    pip install -r requirements.txt
    ```
-3. Copy the example environment file and initialise the database:
+3. Copy the example environment file and initialise the database (still in `backend/`):
    ```powershell
    copy .env.example .env
    flask init-db
@@ -23,6 +24,7 @@ Thank you for your interest in contributing! FinSight is an open project and wel
    ```powershell
    pytest
    ```
+5. For the web app, in `frontend/`: `npm ci`, then `npm run dev`.
 
 ---
 
@@ -41,8 +43,11 @@ Thank you for your interest in contributing! FinSight is an open project and wel
 
 ### Running Tests
 ```powershell
-# Full suite (no external services required — uses the fake LLM gateway)
+# Full suite, from backend/ (no external services required — uses the fake LLM gateway)
 pytest
+
+# Frontend type check, from frontend/
+npm run typecheck
 
 # With coverage
 pytest --cov=app --cov-report=term-missing

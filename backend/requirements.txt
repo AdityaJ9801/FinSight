@@ -22,7 +22,3 @@ beautifulsoup4==4.12.3
 lxml==5.3.0
 gunicorn==23.0.0
 pytest==8.3.3
-fastapi==0.115.6
-starlette==0.41.3
-# Runs frontend_server.py (serves the web frontend in frontend/).
-uvicorn==0.32.0

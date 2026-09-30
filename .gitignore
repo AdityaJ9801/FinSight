@@ -42,7 +42,6 @@ build/
 .DS_Store
 Thumbs.db
 desktop.ini
-.claude/
 
 # Ad hoc/manual validation scripts & logs
 scratch/

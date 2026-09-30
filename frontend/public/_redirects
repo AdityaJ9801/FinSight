@@ -1,0 +1,2 @@
+# Netlify: serve the app for every client-side route (/analyses/<id>, /compare, ...).
+/*    /index.html   200

@@ -8,8 +8,8 @@
 FinSight is an end-to-end, multi-agent financial analysis platform that ingests unstructured and structured corporate financial documents (P&L, Balance Sheet, Cash Flow Statement, Bank Statements, and GST Returns) in Excel/CSV/PDF formats — including multi-sheet workbooks and files with metadata headers — extracts and reconciles them into an immutable ledger, computes standardized financial ratios, executes ML anomaly/risk/forecast analysis, and generates publication-grade executive reports with interleaved visualizations and an interactive Virtual CFO diagnostic Q&A assistant.
 
 Two interfaces access the Flask API over HTTP:
-1. **Web Application** (`frontend/`, React + TypeScript + Vite; served by `frontend_server.py` at `http://localhost:8080`, which also proxies `/api` to Flask): upload, a live run log of every agent, human-in-the-loop review, an overview with a summary opinion, key ratios, health rating, peer benchmarks and findings, the verified report, charts, detailed statement analysis, side-by-side comparison of analyses, and a chat panel that guides a running analysis or answers questions about a finished one.
-2. **RESTful API** (`app/api/` at `http://localhost:5000/api`): Comprehensive endpoints for automated workflows, agent steering, job control, and data export.
+1. **Web Application** (`frontend/`, React + TypeScript + Vite; a static site; in Docker, nginx serves it at `http://localhost:8080` and forwards `/api` to Flask): upload, a live run log of every agent, human-in-the-loop review, an overview with a summary opinion, key ratios, health rating, peer benchmarks and findings, the verified report, charts, detailed statement analysis, side-by-side comparison of analyses, and a chat panel that guides a running analysis or answers questions about a finished one.
+2. **RESTful API** (`backend/app/api/` at `http://localhost:5000/api`): Comprehensive endpoints for automated workflows, agent steering, job control, and data export.
 
 **No login required for local execution.** Designed as a direct application where all requests resolve to a default tenant/entity (`app/utils/default_tenant.py`), while preserving multi-tenant database schemas under the hood.
 
@@ -57,82 +57,94 @@ Two interfaces access the Flask API over HTTP:
 
 ## Quickstart — Docker (Recommended)
 
-This is the easiest way to run the entire platform (Flask API + Celery Worker + Redis + Web Frontend) with a single command. Requires Docker Desktop.
+Runs everything (Flask API, Celery worker, Redis, web app) with one command. Requires Docker Desktop.
 
 ```powershell
-copy .env.docker.example .env.docker
+copy backend\.env.docker.example backend\.env.docker
 docker compose up --build
 ```
 
-`.env.docker` defaults to `LLM_BACKEND=fake`, enabling full end-to-end testing before adding real LLM credentials.
-
-This builds the unified Docker image, starts Redis, executes the database initialization container (`flask init-db`), and starts:
+`.env.docker` defaults to `LLM_BACKEND=fake`, so the whole pipeline runs before you add real LLM credentials.
+Compose builds the two images (`backend/` and `frontend/`), starts Redis, runs `flask init-db` once, and starts:
+- **Web application**: `http://localhost:8080` (nginx, forwards `/api` to the API)
 - **Flask API**: `http://localhost:5000`
-- **Modern Web Application**: `http://localhost:8080`
-- **Celery Worker**: Background task executor connected to Redis.
+- **Celery worker**: runs the analysis pipeline
 
-Open **`http://localhost:8080`** in your browser:
-1. **Run Analysis**: Upload sample files from `seed/data/` (e.g. `balance_sheet.csv`, `pnl.csv`, `cash_flow.csv`) or `seed/data/multi_sheet_statements.xlsx`, and click **Run Pipeline**.
-2. **Watch Live Trace**: Watch real-time execution across Intake, Extractor, Mapper, Reconciler, Analysis, Insight, Chart Spec, Report Writer, and Verifier agents.
-3. **Review & Approve**: Handle reconciliation discrepancies or low-confidence mappings.
-4. **Results**: Inspect metrics, findings, and the rendered executive report (HTML, DOCX, PDF).
-5. **Ask a Question**: Query the Virtual CFO assistant for figures, visual charts, or reverse-flow root-cause diagnostics.
+Open **`http://localhost:8080`**, click **Use sample statements** (or upload your own), and start an analysis.
 
-Command line test run from a second terminal:
-```powershell
-python seed/upload_demo_job.py
-```
-
-To stop containers: `docker compose down` (persists data in volume) or `docker compose down -v` (wipes data for a clean slate).
+To stop: `docker compose down` (keeps data) or `docker compose down -v` (wipes it).
 
 ---
 
 ## Quickstart — Native (Windows / macOS / Linux)
 
-### 1. Environment Setup
+### 1. Backend setup
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
+cd backend
 pip install -r requirements.txt
 copy .env.example .env
 flask init-db
 ```
 
-### 2. Start Services
-Requires Redis running on `localhost:6379` (`docker run -d -p 6379:6379 redis:alpine`).
-
-In separate terminals:
+### 2. Start the services
+Requires Redis on `localhost:6379` (`docker run -d -p 6379:6379 redis:alpine`). In separate terminals:
 ```powershell
-# Terminal 1: Celery Worker (--pool=solo required on Windows)
+# Terminal 1 (in backend/): Celery worker (--pool=solo is required on Windows)
 celery -A app.workers.celery_app worker --pool=solo -l info
 
-# Terminal 2: Flask API Backend
+# Terminal 2 (in backend/): Flask API on :5000
 python run.py
 
-# Terminal 3: Web Application Frontend
-cd frontend; npm ci; npm run build; cd ..
-uvicorn frontend_server:app --port 8080
+# Terminal 3 (in frontend/): web app
+npm ci
+npm run dev        # http://localhost:5173, hot reload
+# or, the production build: npm run build && npm run preview   (http://localhost:8080)
 ```
 
-**Frontend development** (hot reload, proxies `/api` to Flask on :5000): `cd frontend && npm run dev`, then open `http://localhost:5173`.
-
-Open `http://localhost:8080` to access the application.
+Both `npm run dev` and `npm run preview` forward `/api` to the backend on `:5000`.
 
 ---
 
 ## Testing
 
 ```powershell
+cd backend
 pytest
 ```
 
-The test suite runs against a deterministic fake LLM gateway without requiring external API credentials or a running Redis broker:
-- **89 unit and integration tests** covering document parsing, table detection, accounting reconciliation, metric computation, agent workflows, the DAG executor and agent registry, detailed analytics, charts, Virtual CFO diagnostic compendium, and end-to-end report generation.
+The suite runs against a deterministic fake LLM gateway, with no API credentials or Redis broker needed. It
+covers document parsing, table detection, reconciliation, metric computation, agent workflows, the DAG executor
+and agent registry, detailed analytics, charts, bank-statement-only analyses, peer benchmarks, the web API, the
+Virtual CFO compendium and end-to-end report generation.
+
+Frontend type check: `cd frontend && npm run typecheck`.
 
 Inside Docker:
 ```powershell
 docker compose run --rm api python -m pytest
 ```
+
+---
+
+## Deployment
+
+`backend/` and `frontend/` are independent, so they can be deployed together or separately.
+
+**Everything on one server:** `docker compose up -d --build`. Put a TLS-terminating proxy in front of port 8080.
+
+**Separately**, for example the backend on Render, Railway or a VM, and the frontend on Vercel or Netlify:
+
+| | Backend (`backend/`) | Frontend (`frontend/`) |
+|---|---|---|
+| Build | `backend/Dockerfile` | `npm ci && npm run build` (output `dist/`), or `frontend/Dockerfile` |
+| Run | API: image default (gunicorn on `$PORT`, default 5000). Worker: `celery -A app.workers.celery_app worker -l info`. Once per release: `flask init-db` | Static files; `vercel.json` / `public/_redirects` handle client-side routes |
+| Config | Environment from `backend/.env.example` (`CELERY_BROKER_URL` must point at your Redis) | `VITE_API_BASE=https://<your-backend>/api` at build time |
+| Storage | Persist `/app/instance` (SQLite database and uploaded files), or set `DATABASE_URL` / `STORAGE_ROOT` | none |
+
+The API allows cross-origin requests, so a frontend on its own domain works without extra setup. With the
+`frontend/Dockerfile` (nginx), set `API_URL` to the backend's address instead and leave `VITE_API_BASE` unset.
 
 ---
 
@@ -253,28 +265,27 @@ Flask API Layer
 ## Repository Layout
 
 ```
-├── app/
-│   ├── agents/
-│   │   ├── data/             # Intake, Extractor, Mapper, Reconciler
-│   │   ├── analysis/         # Ratio, Cash/WC, Forecast, Risk, GST, Detailed Analytics
-│   │   ├── delivery/         # Insight, ChartSpec, ReportWriter, QAAgent, publishing
-│   │   └── registry.py       # Agent registry (stages, dependencies, descriptions)
-│   ├── api/                  # Flask REST blueprints (jobs, review, results, qa, llm, agents)
-│   ├── domain/               # Chart of Accounts, Taxonomy, 40-metric Virtual CFO Compendium
-│   ├── llm_gateway/          # Unified LLM client (OpenAI, Gemini, Custom, Fake)
-│   ├── memory/               # Historical mapping memory
-│   ├── models/               # SQLAlchemy models (Job, Document, Account, Metric, Report)
-│   ├── orchestrator/         # Stage coordinator, DAG executor, blackboard, gates, instruction steering
-│   ├── tools/                # Deterministic tools (parsers, metrics, detailed analysis, ML, renderers)
-│   └── workers/              # Celery application and task definitions
-├── frontend/                 # Web application (React + TypeScript + Vite)
-├── frontend_server.py        # Serves frontend/dist and proxies /api to Flask (FastAPI/Uvicorn)
-├── seed/                     # Sample data (P&L, Balance Sheet, Cash Flow, Multi-sheet Excel)
-├── tests/                    # 89 automated unit and integration tests
-├── Dockerfile                # Production container specification
-├── docker-compose.yml        # Multi-service stack (API, Worker, Redis, Frontend)
-├── requirements.txt          # Python dependencies
-└── run.py                    # Flask development server entrypoint
+├── backend/                  # Flask API + Celery worker (deploy on its own)
+│   ├── app/
+│   │   ├── agents/           # data/, analysis/, delivery/ agents and the agent registry
+│   │   ├── api/              # REST blueprints (jobs, review, results, qa, llm, agents, benchmarks)
+│   │   ├── domain/           # Chart of accounts, taxonomy, Virtual CFO compendium, benchmarks
+│   │   ├── llm_gateway/      # Unified LLM client (OpenAI, Gemini, custom, fake)
+│   │   ├── models/           # SQLAlchemy models
+│   │   ├── orchestrator/     # Stage coordinator, DAG executor, blackboard, instruction steering
+│   │   ├── tools/            # Deterministic tools (parsers, metrics, analysis, ML, renderers)
+│   │   └── workers/          # Celery application and tasks
+│   ├── seed/                 # Sample statements
+│   ├── tests/                # Automated tests
+│   ├── Dockerfile            # API/worker image (gunicorn)
+│   ├── requirements.txt
+│   └── run.py                # App entrypoint (python run.py for local development)
+├── frontend/                 # React + TypeScript + Vite web app (deploy on its own)
+│   ├── src/                  # Pages, components, API client
+│   ├── Dockerfile            # Build + nginx image
+│   ├── nginx.conf.template   # SPA routing and /api forwarding
+│   └── vercel.json           # Static-host routing (Netlify: public/_redirects)
+└── docker-compose.yml        # Whole stack: Redis, init, API, worker, web
 ```
 
 ---

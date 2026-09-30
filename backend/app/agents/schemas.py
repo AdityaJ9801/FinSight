@@ -125,7 +125,7 @@ class AssistantOption(BaseModel):
 class AssistantDecision(BaseModel):
     """The orchestrator's read on a post-hoc chat request: does it need a specific
     analysis agent re-run, and if the request is genuinely ambiguous between more than one
-    agent/interpretation, what are the concrete options to offer the user (Claude-Code-
+    agent/interpretation, what are the concrete options to offer the user (CLI-
     style multiple choice) instead of guessing."""
     reasoning: str | None = None
     needs_clarification: bool

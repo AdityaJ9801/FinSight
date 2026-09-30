@@ -335,7 +335,7 @@ def ask_assistant(job_id):
     Body: {"message": str, "auto": bool, "chosen_agent": str?, "action_note": str?}.
     - First call: send "message" only. If the orchestrator can't tell which agent you mean,
       the response is {"type": "clarification", "question", "options": [{label,
-      description, agent}, ...]} -- Claude-Code-style multiple choice -- unless "auto" is
+      description, agent}, ...]} -- CLI-style multiple choice -- unless "auto" is
       true, in which case it just picks its best-ranked option itself instead of asking.
     - Follow-up call (after a clarification): send "chosen_agent" (from one of the
       options' `agent` values) and "action_note" (that option's intent) to actually run it.

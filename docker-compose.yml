@@ -1,3 +1,14 @@
+# Whole stack on one machine: `docker compose up --build`, then open http://localhost:8080.
+# backend/ and frontend/ are independent images, so each can also be deployed on its own.
+
+# init, api and worker all run the same backend image: it's built once (by `init`, the first
+# service to start) and reused, instead of three parallel builds of identical code.
+x-backend: &backend
+  image: finsight-backend:local
+  env_file: ./backend/.env.docker
+  volumes:
+    - instance_data:/app/instance
+
 services:
   redis:
     image: redis:7-alpine
@@ -9,26 +20,20 @@ services:
       timeout: 3s
       retries: 15
 
-  # One-shot: creates tables/views + canonical CoA, and the demo tenant/admin user.
-  # Idempotent (checks before insert), so re-running `docker compose up` is safe.
+  # One-shot: creates tables/views + canonical CoA and the default tenant. Idempotent, so
+  # re-running `docker compose up` (or pulling a release with new tables) is safe.
   init:
-    build: .
-    command: sh -c "flask init-db && flask seed-demo"
-    env_file: .env.docker
-    volumes:
-      - instance_data:/app/instance
+    <<: *backend
+    build: ./backend
+    command: flask init-db
     depends_on:
       redis:
         condition: service_healthy
 
   api:
-    build: .
-    command: flask run --host=0.0.0.0 --port=5000
-    env_file: .env.docker
+    <<: *backend
     ports:
       - "5000:5000"
-    volumes:
-      - instance_data:/app/instance
     depends_on:
       redis:
         condition: service_healthy
@@ -36,28 +41,22 @@ services:
         condition: service_completed_successfully
 
   worker:
-    build: .
-    # No --pool=solo here (that's only needed on native Windows, see README) -- Linux
-    # containers support Celery's default prefork pool, so this gets real multi-process
-    # concurrency across jobs for free.
+    <<: *backend
+    # No --pool=solo here (that's only needed on native Windows) -- Linux containers support
+    # Celery's default prefork pool, so jobs get real multi-process concurrency.
     command: celery -A app.workers.celery_app worker -l info --concurrency=2
-    env_file: .env.docker
-    volumes:
-      - instance_data:/app/instance
     depends_on:
       redis:
         condition: service_healthy
       init:
         condition: service_completed_successfully
 
-  # Web frontend: the React build (frontend/dist, compiled in the Dockerfile's node stage)
-  # served by FastAPI/Uvicorn, which also proxies /api/* to the Flask API over the Docker
-  # network -- so the browser only ever talks to http://localhost:8080.
-  frontend:
-    build: .
-    command: uvicorn frontend_server:app --host 0.0.0.0 --port 8080
+  # React app served by nginx, which forwards /api/* to the api service over the Docker
+  # network -- the browser only ever talks to http://localhost:8080.
+  web:
+    build: ./frontend
     environment:
-      FINSIGHT_API_URL: http://api:5000
+      API_URL: http://api:5000
     ports:
       - "8080:8080"
     depends_on:
