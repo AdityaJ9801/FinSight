@@ -4,7 +4,8 @@
 FROM node:22-alpine AS build
 WORKDIR /web
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --prefer-offline --no-audit --no-fund
 COPY . .
 # Leave VITE_API_BASE unset for the nginx setup (the app calls /api on its own origin);
 # set it only when the backend lives on another domain.

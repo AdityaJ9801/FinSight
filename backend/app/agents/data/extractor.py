@@ -5,13 +5,14 @@ import re
 from datetime import date, datetime
 
 from app.agents.base import AgentResult, ArtifactRef, Issue, Status, TaskSpec, WorkerAgent
-from app.agents.schemas import TableBoundaryResult
+from app.agents.schemas import ExtractedTableResult, TableBoundaryResult
 from app.extensions import db
 from app.llm_gateway import prompts
 from app.llm_gateway.prompt_utils import embed_json
 from app.models.bank import BankTransaction
 from app.models.document import Document
 from app.models.gst import GstReturn
+from app.tools.parsers import RawRow, RawTable
 from app.tools.parsers.csv_tool import read_bank_csv, read_csv
 from app.tools.parsers.excel import read_excel
 from app.tools.parsers.pdf import extract_pdf_tables, is_scanned_pdf
@@ -20,6 +21,7 @@ from app.utils import storage
 
 _DATE_FORMATS = ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%m/%d/%Y"]
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+_IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "tiff", "tif", "bmp"}
 
 
 def _parse_date(value: str) -> date | None:
@@ -40,9 +42,10 @@ def _safe_name(name: str) -> str:
 
 class ExtractorAgent(WorkerAgent):
     name = "extractor"
-    allowed_tools = ["file.read", "excel.read_sheets", "excel.read_grid", "csv.read", "csv.read_grid",
-                      "csv.read_bank", "pdf.extract_tables", "pdf.extract_text", "ocr.page",
-                      "table.detect_header_row"]
+    allowed_tools = ["file.read", "excel.read_sheets", "excel.read_grid", "excel.read_bank",
+                      "csv.read", "csv.read_tables", "csv.read_grid", "csv.read_bank",
+                      "pdf.extract_tables", "pdf.extract_text", "ocr.page",
+                      "ocr.extract_text", "ocr.extract_tables", "table.detect_header_row"]
 
     def execute(self, spec: TaskSpec) -> AgentResult:
         document_id = spec.params["document_id"]
@@ -55,10 +58,16 @@ class ExtractorAgent(WorkerAgent):
         abs_path = str(storage.resolve(doc.file_uri))
 
         try:
-            if doc.doc_type == "bank_statement" and ext == "csv":
-                return self._extract_bank(spec, doc, abs_path, dataset_version_id)
-            if doc.doc_type in ("gstr_3b", "gstr_2b") and ext == "csv":
-                return self._extract_gst(spec, doc, abs_path, dataset_version_id)
+            if doc.doc_type == "bank_statement":
+                if ext in ("xlsx", "xls"):
+                    return self._extract_bank(spec, doc, abs_path, dataset_version_id, is_excel=True)
+                elif ext in ("csv", "tsv", "txt"):
+                    return self._extract_bank(spec, doc, abs_path, dataset_version_id, is_excel=False)
+            if doc.doc_type in ("gstr_3b", "gstr_2b"):
+                if ext in ("xlsx", "xls"):
+                    return self._extract_gst(spec, doc, abs_path, dataset_version_id, is_excel=True)
+                elif ext in ("csv", "tsv"):
+                    return self._extract_gst(spec, doc, abs_path, dataset_version_id, is_excel=False)
             return self._extract_statement(spec, doc, ext, abs_path)
         except Exception as exc:
             doc.status = "extraction_failed"
@@ -94,8 +103,40 @@ class ExtractorAgent(WorkerAgent):
             return result.header_row_idx
         return None
 
-    def _extract_bank(self, spec, doc, abs_path, dataset_version_id) -> AgentResult:
-        transactions = self.call_tool("csv.read_bank", file_path=abs_path)
+    def _llm_extract_table(self, ocr_text: str) -> RawTable | None:
+        """Fallback to LLM when deterministic OCR table clustering yields no clean rows."""
+        prompt = [
+            {"role": "system", "content": prompts.TABLE_EXTRACTOR},
+            {"role": "user", "content": f"OCR Text:\n{ocr_text[:6000]}"},
+        ]
+        try:
+            res: ExtractedTableResult = self.call_llm(prompt, schema=ExtractedTableResult)
+        except Exception:
+            return None
+
+        if not res or not res.rows or not res.periods:
+            return None
+
+        raw_rows = []
+        for idx, r in enumerate(res.rows, start=1):
+            if not r.label or not r.values:
+                continue
+            raw_rows.append(RawRow(
+                row_idx=idx,
+                label=r.label,
+                values=r.values,
+                source_ref={"source": "llm_ocr_recovery", "row": idx},
+                section=r.section,
+            ))
+        if raw_rows:
+            return RawTable(rows=raw_rows, periods=res.periods, name="ocr_table")
+        return None
+
+    def _extract_bank(self, spec, doc, abs_path, dataset_version_id, is_excel: bool = False) -> AgentResult:
+        if is_excel:
+            transactions = self.call_tool("excel.read_bank", file_path=abs_path)
+        else:
+            transactions = self.call_tool("csv.read_bank", file_path=abs_path)
         count = 0
         lines = []
         for t in transactions:
@@ -119,22 +160,27 @@ class ExtractorAgent(WorkerAgent):
             summary=f"Extracted {count} bank transactions from '{doc.original_filename}'", confidence=0.95,
         )
 
-    def _extract_gst(self, spec, doc, abs_path, dataset_version_id) -> AgentResult:
-        table = self.call_tool("csv.read", file_path=abs_path)
+    def _extract_gst(self, spec, doc, abs_path, dataset_version_id, is_excel: bool = False) -> AgentResult:
+        if is_excel:
+            sheets = self.call_tool("excel.read_sheets", file_path=abs_path)
+            table = next((info["table"] for info in sheets.values() if info.get("table")), None)
+        else:
+            table = self.call_tool("csv.read", file_path=abs_path)
         return_type = "GSTR3B" if doc.doc_type == "gstr_3b" else "GSTR2B"
         count = 0
         lines = []
-        for row in table.rows:
-            for period_str, value in row.values.items():
-                period = _parse_date(period_str) or doc.period_end
-                if period is None:
-                    continue
-                db.session.add(GstReturn(
-                    dataset_version=dataset_version_id, return_type=return_type, period=period,
-                    field=row.label, value=value, source_doc=doc.id, source_ref=row.source_ref,
-                ))
-                count += 1
-            lines.append(f"{row.label}: {row.values}")
+        if table and getattr(table, "rows", None):
+            for row in table.rows:
+                for period_str, value in row.values.items():
+                    period = _parse_date(period_str) or doc.period_end
+                    if period is None:
+                        continue
+                    db.session.add(GstReturn(
+                        dataset_version=dataset_version_id, return_type=return_type, period=period,
+                        field=row.label, value=value, source_doc=doc.id, source_ref=row.source_ref,
+                    ))
+                    count += 1
+                lines.append(f"{row.label}: {row.values}")
         doc.status = "extracted"
         db.session.commit()
         self._index_for_rag(doc, "\n".join(lines))
@@ -167,19 +213,47 @@ class ExtractorAgent(WorkerAgent):
             header_idx = self.call_tool("table.detect_header_row", grid=grid)
             if header_idx is None:
                 header_idx = self._llm_header_row(grid)
-            table = self.call_tool("csv.read", file_path=abs_path, header_row_idx=header_idx)
-            tables = [table] if table else []
+            tables = self.call_tool("csv.read_tables", file_path=abs_path, header_row_idx=header_idx)
+            if not tables:
+                table = self.call_tool("csv.read", file_path=abs_path, header_row_idx=header_idx)
+                tables = [table] if table else []
+        elif ext in _IMAGE_EXTS:
+            try:
+                tables = self.call_tool("ocr.extract_tables", file_path=abs_path)
+            except Exception:
+                tables = []
         elif ext == "pdf":
             if is_scanned_pdf(abs_path):
-                doc.status = "needs_ocr"
-                db.session.commit()
-                return AgentResult(
-                    task_id=spec.task_id, status=Status.PARTIAL,
-                    summary=f"'{doc.original_filename}' looks like a scanned PDF; OCR path not run "
-                            f"(set OCR_ENABLED=true to process it).",
-                    issues=[Issue(severity="warn", code="SCANNED_PDF", message="No digital text layer found")],
-                )
-            tables = self.call_tool("pdf.extract_tables", file_path=abs_path)
+                try:
+                    tables = self.call_tool("ocr.extract_tables", file_path=abs_path)
+                except Exception as exc:
+                    tables = self.call_tool("pdf.extract_tables", file_path=abs_path)
+                    if not tables:
+                        doc.status = "needs_ocr"
+                        db.session.commit()
+                        return AgentResult(
+                            task_id=spec.task_id, status=Status.PARTIAL,
+                            summary=f"'{doc.original_filename}' looks like a scanned PDF; OCR table extraction failed: {exc}",
+                            issues=[Issue(severity="warn", code="SCANNED_PDF", message=str(exc))],
+                        )
+            else:
+                tables = self.call_tool("pdf.extract_tables", file_path=abs_path)
+                if not tables:
+                    try:
+                        tables = self.call_tool("ocr.extract_tables", file_path=abs_path)
+                    except Exception:
+                        pass
+
+        # If tables is still empty for image or PDF, try LLM table recovery from OCR text
+        if not tables and ext in (_IMAGE_EXTS | {"pdf"}):
+            try:
+                ocr_text = self.call_tool("ocr.extract_text", file_path=abs_path, max_pages=3)
+                if ocr_text.strip():
+                    llm_table = self._llm_extract_table(ocr_text)
+                    if llm_table and llm_table.rows:
+                        tables = [llm_table]
+            except Exception:
+                pass
 
         tables = [t for t in tables if t and t.rows]
         if not tables:

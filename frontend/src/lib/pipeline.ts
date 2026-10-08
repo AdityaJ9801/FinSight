@@ -11,7 +11,7 @@ export interface AgentDef {
 
 const DATA: AgentDef[] = [
   { id: "intake_classifier", label: "Intake", does: "Identifies each document's statement type and period", stage: "data" },
-  { id: "extractor", label: "Extraction", does: "Parses tables out of CSV, Excel and PDF", stage: "data" },
+  { id: "extractor", label: "Extraction", does: "Parses tables out of CSV, Excel, PDF and Images via OCR", stage: "data" },
   { id: "schema_mapper", label: "Account mapping", does: "Maps line items to the chart of accounts", stage: "data" },
   { id: "reconciler", label: "Reconciliation", does: "Checks the statements tie out", stage: "data" },
 ];

@@ -2,8 +2,16 @@
 venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .pytest_cache/
 instance/
 *.db
 .env
 .env.docker
+scratch/
+tests/
+*.log
+.git/
+.coverage
+htmlcov/

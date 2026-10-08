@@ -38,7 +38,8 @@ from app.utils.ids import new_id
 bp = Blueprint("jobs", __name__)
 
 
-_UPLOAD_EXTENSIONS = {".csv", ".xlsx", ".xls", ".pdf"}
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".tiff", ".tif", ".bmp"}
+_UPLOAD_EXTENSIONS = {".csv", ".xlsx", ".xls", ".pdf", *_IMAGE_EXTENSIONS}
 # Statuses in which a job can take more statements: not while stages are executing.
 _SETTLED_STATUSES = {"COMPLETED", "FAILED", "AWAITING_REVIEW", "NEEDS_ANALYST", "PARTIAL"}
 

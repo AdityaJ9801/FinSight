@@ -10,42 +10,25 @@ single table.
 """
 from __future__ import annotations
 
+from app.tools.parsers.structure import clean_numeric
 from app.tools.registry import tool
 
 
 def _looks_numeric(cell) -> bool:
-    if cell in (None, ""):
-        return False
-    s = str(cell).strip().replace(",", "")
-    if s.startswith("(") and s.endswith(")") and len(s) > 2:
-        s = "-" + s[1:-1]
-    if not s:
-        return False
-    try:
-        float(s)
-        return True
-    except ValueError:
-        return False
+    return clean_numeric(cell) is not None
 
 
 def _is_numeric_data_cell(cell) -> bool:
     if cell in (None, ""):
         return False
-    if isinstance(cell, (int, float)):
-        # 4-digit years between 1900 and 2100 are valid headers
-        if isinstance(cell, int) and 1900 <= cell <= 2100:
-            return False
-        return True
-    s = str(cell).strip().replace(",", "")
-    if s.startswith("(") and s.endswith(")") and len(s) > 2:
-        return True
-    try:
-        f = float(s)
-        if "." in s or f < 1900 or f > 2100:
-            return True
-    except ValueError:
-        pass
-    return False
+    # Check if 4-digit year: valid period header, not data cell
+    if isinstance(cell, int) and 1900 <= cell <= 2100:
+        return False
+    s = str(cell).strip()
+    if s.isdigit() and len(s) == 4 and 1900 <= int(s) <= 2100:
+        return False
+    val = clean_numeric(cell)
+    return val is not None
 
 
 def detect_header_row_heuristic(grid: list[list], max_scan: int = 15) -> int | None:
@@ -55,13 +38,14 @@ def detect_header_row_heuristic(grid: list[list], max_scan: int = 15) -> int | N
 
     Handles real-world financial statements where:
     1. Candidate periods must not be raw numeric data values (e.g. 109059.93).
-    2. The header may be followed by section headers (e.g. 'ASSETS', '(A) Operating activities')
+    2. Cell A1 in the header may be blank/empty while periods are in subsequent columns.
+    3. The header may be followed by section headers (e.g. 'ASSETS', '(A) Operating activities')
        before the first numeric row appears -- looks ahead up to 6 rows.
     """
     scan = grid[:max_scan]
     for i in range(len(scan) - 1):
         row = scan[i]
-        if not row or row[0] in (None, ""):
+        if not row or not any(c not in (None, "") for c in row):
             continue
         candidate_periods = [c for c in row[1:] if c not in (None, "")]
         if not candidate_periods:
@@ -74,7 +58,7 @@ def detect_header_row_heuristic(grid: list[list], max_scan: int = 15) -> int | N
             next_row = scan[i + offset]
             if not next_row:
                 continue
-            next_values = next_row[1:1 + len(candidate_periods)]
+            next_values = next_row[1:1 + len(candidate_periods)] if len(next_row) > 1 else next_row
             if any(_looks_numeric(v) for v in next_values):
                 return i
     return None

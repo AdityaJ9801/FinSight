@@ -3,7 +3,7 @@ import type {
   LlmStatus, Metric, QaResponse, ReviewItem, TaskRun, ValidationCheck,
 } from "./types";
 
-export const API_BASE: string = (import.meta.env.VITE_API_BASE as string | undefined) ?? "/api";
+export const API_BASE: string = import.meta.env.VITE_API_BASE || "/api";
 
 export class ApiError extends Error {
   status: number;
@@ -99,9 +99,14 @@ export const api = {
   qa: (jobId: string, question: string, history: { role: string; content: string }[]) =>
     request<QaResponse>("/qa", json({ job_id: jobId, question, history })),
   reviewItems: (jobId: string) => request<ReviewItem[]>(`/review/items?job_id=${encodeURIComponent(jobId)}`),
+  recommendReview: (jobId: string) =>
+    request<{ status: string; summary: string }>(`/review/recommend`, json({ job_id: jobId })),
+  autoResolveReview: (jobId: string) =>
+    request<{ status: string; summary: string }>(`/review/auto-resolve`, json({ job_id: jobId })),
   resolveReview: (itemId: string, resolution: { note?: string; account_id?: string }) =>
     request<{ status: string; remaining_open: number }>(`/review/items/${itemId}/resolve`, json(resolution)),
   agents: () => request<{ name: string; stage: string; label: string; description: string }[]>("/agents"),
+
   detailedAnalysis: (id: string) => request<DetailedAnalysis>(`/jobs/${id}/analysis`),
   llmStatus: () => request<LlmStatus>("/llm/status"),
   saveLlm: (payload: Record<string, unknown>) => request<LlmStatus>("/llm/config", json(payload)),

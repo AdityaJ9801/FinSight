@@ -3,3 +3,6 @@ dist/
 *.tsbuildinfo
 .env
 .env.local
+.git/
+.vscode/
+*.log

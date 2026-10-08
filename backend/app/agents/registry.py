@@ -55,6 +55,9 @@ AGENTS: tuple[AgentDescriptor, ...] = (
                     "app.agents.data.mapper:SchemaMapperAgent", depends_on=("extractor",), steerable=True),
     AgentDescriptor("reconciler", "data", "Reconciler", "✅", "runs cross-statement reconciliation checks",
                     "app.agents.data.reconciler:ReconcilerAgent", depends_on=("schema_mapper",)),
+    AgentDescriptor("verification_advisor", "data", "Verification Advisor", "🛡️",
+                    "analyzes verification review items, provides CoA recommendations and auto-resolves discrepancies",
+                    "app.agents.data.verification_advisor:VerificationAdvisorAgent", depends_on=("reconciler",), steerable=True, rerunnable=True),
     # --- analysis stage (independent modules, run in parallel) ---
     AgentDescriptor("ratio", "analysis", "Ratio & Trend", "📊",
                     "computes profitability/liquidity/leverage/efficiency ratios and writes trend findings",

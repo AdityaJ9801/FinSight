@@ -34,3 +34,13 @@ def test_trailing_footnote_after_data_does_not_confuse_detection():
         ["Note: figures are provisional", ""],
     ]
     assert detect_header_row_heuristic(grid) == 0
+
+
+def test_empty_first_cell_header_detected():
+    grid = [
+        ["", "2023-03-31", "2024-03-31"],
+        ["Revenue from Operations", "10000000", "12000000"],
+        ["Cost of Materials Consumed", "6000000", "7000000"],
+    ]
+    assert detect_header_row_heuristic(grid) == 0
+

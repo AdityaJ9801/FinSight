@@ -508,6 +508,83 @@ input:focus, textarea:focus { outline: none; border-color: var(--tick); box-shad
 .mapping summary { cursor: pointer; font-weight: 500; font-size: 13px; }
 .mapping .table { margin-top: 10px; background: var(--sheet); border-radius: var(--r-md); }
 
+.advisor-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 16px;
+  background: rgba(14, 116, 144, 0.08);
+  border: 1px solid rgba(14, 116, 144, 0.25);
+  border-radius: var(--r-md);
+  margin-top: 14px;
+  margin-bottom: 16px;
+}
+.advisor-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  color: #0369a1;
+}
+.advisor-card {
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-left: 3px solid #0284c7;
+  border-radius: 4px;
+  font-size: 13px;
+}
+.advisor-card-title {
+  font-weight: 600;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.advisor-card-body {
+  color: var(--ink-2);
+  line-height: 1.4;
+}
+.advisor-card-audit {
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--graphite);
+}
+.advisor-rec-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  background: rgba(2, 132, 199, 0.12);
+  color: #0369a1;
+  border: 1px solid rgba(2, 132, 199, 0.3);
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.btn-xs {
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+
 /* ---------------------------------------------------------------- report / charts / data */
 
 .report { border: 1px solid var(--rule); border-radius: var(--r-md); background: var(--sheet); overflow: hidden; }

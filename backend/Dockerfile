@@ -1,20 +1,20 @@
 # FinSight API + Celery worker image. The same image runs both; docker-compose (or your
 # platform) picks the command: the API by default, `celery -A app.workers.celery_app worker`
 # for the worker, and `flask init-db` once to create the schema.
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
-# System deps for the parsing/ML/rendering stack: pdfplumber/PyMuPDF/matplotlib/
-# scikit-learn/statsmodels all ship manylinux wheels for this base image, so this stays
-# minimal -- just what a couple of them need at import/runtime, not a full build toolchain.
+# Minimal system deps for OCR and OpenMP math acceleration
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libglib2.0-0 \
     libgomp1 \
+    tesseract-ocr \
+    tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
 COPY . .
 

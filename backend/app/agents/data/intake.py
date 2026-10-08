@@ -33,7 +33,7 @@ def _head_tail_preview(lines: list[str], head: int = _PREVIEW_HEAD, tail: int = 
 
 class IntakeAgent(WorkerAgent):
     name = "intake_classifier"
-    allowed_tools = ["pdf.extract_text", "layout.fingerprint"]
+    allowed_tools = ["pdf.extract_text", "layout.fingerprint", "ocr.extract_text"]
 
     def execute(self, spec: TaskSpec) -> AgentResult:
         document_id = spec.params["document_id"]
@@ -49,13 +49,21 @@ class IntakeAgent(WorkerAgent):
         try:
             if ext == "pdf":
                 full_text = self.call_tool("pdf.extract_text", file_path=abs_path, max_pages=10)
+                if len(full_text.strip()) < 20:
+                    try:
+                        full_text = self.call_tool("ocr.extract_text", file_path=abs_path, max_pages=3)
+                    except Exception:
+                        pass
+                text_excerpt = _head_tail_preview(full_text.splitlines())
+            elif ext in ("png", "jpg", "jpeg", "webp", "tiff", "tif", "bmp"):
+                full_text = self.call_tool("ocr.extract_text", file_path=abs_path)
                 text_excerpt = _head_tail_preview(full_text.splitlines())
             elif ext == "csv":
                 headers = sniff_csv_headers(abs_path)
                 # Header alone is often just column labels ("Line Item", period dates) with
                 # no signal about statement type -- sampling real rows (start and end) gives
                 # the classifier something to actually match against.
-                lines = Path(abs_path).read_text(encoding="utf-8-sig").splitlines()
+                lines = Path(abs_path).read_text(encoding="utf-8-sig", errors="replace").splitlines()
                 text_excerpt = _head_tail_preview(lines)
             elif ext in ("xlsx", "xls"):
                 import openpyxl

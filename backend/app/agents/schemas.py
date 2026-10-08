@@ -33,6 +33,17 @@ class TableBoundaryResult(BaseModel):
     confidence: float = 0.5
 
 
+class ExtractedTableRow(BaseModel):
+    label: str
+    values: dict[str, float] = Field(default_factory=dict)
+    section: str = ""
+
+
+class ExtractedTableResult(BaseModel):
+    periods: list[str] = Field(default_factory=list)
+    rows: list[ExtractedTableRow] = Field(default_factory=list)
+
+
 class MappingItem(BaseModel):
     source_label: str
     account_id: str
@@ -133,3 +144,21 @@ class AssistantDecision(BaseModel):
     options: list[AssistantOption] = Field(default_factory=list)
     chosen_agent: str = ""  # set when needs_clarification is False
     action_note: str = ""  # what to tell chosen_agent to focus on, from the user's own words
+
+
+class VerificationItemRecommendation(BaseModel):
+    item_id: str
+    kind: str  # mapping | reconciliation
+    suggested_account_id: str | None = None
+    account_name: str | None = None
+    confidence: float = 0.8
+    reasoning: str
+    action: str = "accept"  # accept | remap | adjust
+    audit_note: str = ""
+    auto_resolvable: bool = True
+    alternatives: list[dict[str, str]] = Field(default_factory=list)
+
+
+class VerificationRecommendationsResult(BaseModel):
+    recommendations: list[VerificationItemRecommendation] = Field(default_factory=list)
+

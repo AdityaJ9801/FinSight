@@ -187,10 +187,30 @@ class DataSupervisor:
                 blocking_items.append(item)
 
         if blocking_items:
+            # Generate automated verification recommendations via VerificationAdvisorAgent
+            # so the analyst has ready recommendations and doesn't have to fill data manually.
+            auto_resolve = self.app.config.get("AUTO_RESOLVE_VERIFICATION", False)
+            try:
+                from app.agents.data.verification_advisor import VerificationAdvisorAgent
+                advisor = VerificationAdvisorAgent(self.llm)
+                spec = _make_spec(job, "verification_advisor", {"job_id": job.id, "auto_resolve": auto_resolve})
+                advisor.run(spec)
+                if auto_resolve:
+                    remaining = [
+                        i for i in ReviewItem.query.filter_by(job_id=job.id, status="open").all()
+                        if not (i.kind == "mapping" and auto_approve_mappings)
+                    ]
+                    if not remaining:
+                        blocking_items = []
+            except Exception as exc:
+                self.app.logger.warning("VerificationAdvisor auto-recommendation issue: %s", exc)
+
+        if blocking_items:
             job.status = "AWAITING_REVIEW"
             job.set_progress(65, f"{len(blocking_items)} item(s) need analyst review")
             db.session.commit()
             return False
+
 
         from app.models.dataset import DatasetVersion
 

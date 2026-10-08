@@ -84,6 +84,20 @@ export interface HealthScore {
   breakdown: { metric_code: string; points: number; weight: number; included: boolean }[];
 }
 
+export interface ReviewRecommendation {
+  item_id?: string;
+  kind?: string;
+  action?: "accept" | "remap" | "adjust" | string;
+  suggested_account_id?: string;
+  account_name?: string;
+  confidence?: number;
+  reasoning?: string;
+  audit_note?: string;
+  title?: string;
+  auto_resolvable?: boolean;
+  alternatives?: { account_id: string; account_name?: string; confidence?: number }[];
+}
+
 export interface ReviewItem {
   id: string;
   kind: "reconciliation" | "mapping" | string;
@@ -96,12 +110,16 @@ export interface ReviewItem {
     diff?: number;
     explanation?: string;
     label?: string;
+    section?: string;
     suggested_account_id?: string;
     confidence?: number;
     document_id?: string;
+
+    recommendation?: ReviewRecommendation;
     [k: string]: unknown;
   };
 }
+
 
 export interface Instruction {
   id: string;

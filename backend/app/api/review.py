@@ -27,6 +27,51 @@ def list_items():
     } for i in items])
 
 
+@bp.post("/recommend")
+def generate_recommendations():
+    data = request.get_json(force=True, silent=True) or {}
+    job_id = data.get("job_id") or request.args.get("job_id")
+    if not job_id or _scoped_job(job_id) is None:
+        return jsonify(error="job_id is required and must belong to your tenant"), 400
+
+    from app.agents.base import TaskSpec
+    from app.agents.data.verification_advisor import VerificationAdvisorAgent
+    from app.llm_gateway import get_llm_gateway
+    from app.utils.ids import new_id
+
+    job = Job.query.get(job_id)
+    advisor = VerificationAdvisorAgent(get_llm_gateway())
+    spec = TaskSpec(
+        task_id=new_id("t_"), job_id=job.id, tenant_id=job.tenant_id, agent="verification_advisor",
+        goal="verification advice", params={"job_id": job.id, "auto_resolve": False},
+    )
+    res = advisor.run(spec)
+    return jsonify(status="ok", summary=res.summary, usage=res.usage)
+
+
+@bp.post("/auto-resolve")
+def auto_resolve():
+    data = request.get_json(force=True, silent=True) or {}
+    job_id = data.get("job_id") or request.args.get("job_id")
+    if not job_id or _scoped_job(job_id) is None:
+        return jsonify(error="job_id is required and must belong to your tenant"), 400
+
+    from app.agents.base import TaskSpec
+    from app.agents.data.verification_advisor import VerificationAdvisorAgent
+    from app.llm_gateway import get_llm_gateway
+    from app.utils.ids import new_id
+
+    job = Job.query.get(job_id)
+    advisor = VerificationAdvisorAgent(get_llm_gateway())
+    spec = TaskSpec(
+        task_id=new_id("t_"), job_id=job.id, tenant_id=job.tenant_id, agent="verification_advisor",
+        goal="verification auto resolve", params={"job_id": job.id, "auto_resolve": True},
+    )
+    res = advisor.run(spec)
+    return jsonify(status="ok", summary=res.summary, usage=res.usage)
+
+
+
 @bp.post("/items/<item_id>/resolve")
 def resolve_item(item_id):
     item = ReviewItem.query.get(item_id)
@@ -37,24 +82,24 @@ def resolve_item(item_id):
 
     resolution = request.get_json(force=True, silent=True) or {}
     tenant_id = current_tenant_id()
+    rec = (item.payload or {}).get("recommendation") or {}
 
     if item.kind == "mapping":
-        account_id = resolution.get("account_id")
+        account_id = resolution.get("account_id") or rec.get("suggested_account_id")
         if not account_id:
             return jsonify(error="resolution.account_id is required for a mapping review item"), 400
         payload = item.payload
         doc = Document.query.get(payload["document_id"])
         write_memory(tenant_id, doc.entity_id if doc else None, doc.layout_id if doc else None,
                      payload["label"], account_id, confidence=1.0, method="human", approved_by=current_user_id())
-        # Re-point facts already written under the low-confidence guess to the corrected
-        # account. Simplification: this matches by (document, suggested_account_id), not by
-        # the exact source row, so if two distinct unmapped labels in the same document both
-        # fell back to the same default account, correcting one would also move the other's
-        # facts. Acceptable for a single low-confidence label per document (the common case);
-        # a precise fix would filter on FinancialFact.source_ref's row index too.
         FinancialFact.query.filter_by(source_doc=payload.get("document_id")).filter(
             FinancialFact.account_id == payload.get("suggested_account_id")
         ).update({"account_id": account_id, "confidence": 1.0})
+        resolution["account_id"] = account_id
+
+    elif item.kind == "reconciliation":
+        if not resolution.get("note"):
+            resolution["note"] = rec.get("audit_note") or "Accepted by reviewer"
 
     item.status = "resolved"
     item.resolution = resolution
@@ -64,12 +109,6 @@ def resolve_item(item_id):
     item.resolved_at = datetime.now(timezone.utc)
     db.session.commit()
 
-    # Mirrors DataSupervisor.run_stage's own blocking-vs-gap distinction: a low-confidence
-    # mapping item that never blocked the gate in the first place (AUTO_APPROVE_LOW_CONFIDENCE)
-    # shouldn't be required reading before the job can resume -- otherwise a job with any
-    # auto-approved mapping gaps (the common case) could never resume once ANY genuinely
-    # blocking item (e.g. a reconciliation failure) got resolved, since those gap items are
-    # still persisted with status="open" for visibility/audit but were never actually blocking.
     open_items = ReviewItem.query.filter_by(job_id=item.job_id, status="open").all()
     auto_approve_mappings = current_app.config.get("AUTO_APPROVE_LOW_CONFIDENCE", True)
     remaining = sum(1 for i in open_items if not (i.kind == "mapping" and auto_approve_mappings))
@@ -82,3 +121,4 @@ def resolve_item(item_id):
         run_data_stage.delay(job.id)
 
     return jsonify(status="resolved", remaining_open=remaining)
+

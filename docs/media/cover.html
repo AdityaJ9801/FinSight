@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FinSight — Cover</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    background: #0a0a14;
+    color: #f1f5f9;
+    width: 1280px;
+    height: 720px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Top accent bar */
+  .accent-bar {
+    height: 3px;
+    background: linear-gradient(90deg, #0f62fe 0%, #a855f7 50%, #06b6d4 100%);
+    flex-shrink: 0;
+  }
+
+  .layout {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    padding: 40px 48px 36px;
+    gap: 40px;
+  }
+
+  /* Left column */
+  .left {
+    width: 380px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+
+  .brand { margin-bottom: 24px; }
+  .brand-logo {
+    width: 52px; height: 52px;
+    background: #0f62fe;
+    border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; font-weight: 900; color: #fff;
+    margin-bottom: 16px;
+    letter-spacing: -1px;
+  }
+  .brand-name {
+    font-size: 44px; font-weight: 800; letter-spacing: -1.5px;
+    line-height: 1;
+    color: #f8fafc;
+  }
+  .brand-name span { color: #3b82f6; }
+  .brand-tagline {
+    font-size: 15px; color: #64748b;
+    margin-top: 8px; line-height: 1.4;
+    max-width: 320px;
+  }
+
+  .pills { display: flex; flex-wrap: wrap; gap: 7px; margin: 24px 0; }
+  .pill {
+    padding: 4px 12px; border-radius: 14px;
+    font-size: 11px; font-weight: 700;
+    letter-spacing: 0.3px;
+  }
+  .pill-blue { background: #0f62fe22; border: 1px solid #0f62fe55; color: #93c5fd; }
+  .pill-green { background: #16a34a22; border: 1px solid #16a34a55; color: #86efac; }
+  .pill-purple { background: #7c3aed22; border: 1px solid #7c3aed55; color: #c4b5fd; }
+  .pill-orange { background: #b45309; border: 1px solid #d97706; color: #fed7aa; }
+
+  .features { display: flex; flex-direction: column; gap: 10px; }
+  .feature { display: flex; align-items: flex-start; gap: 10px; }
+  .feature-icon {
+    width: 28px; height: 28px; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; flex-shrink: 0; margin-top: 1px;
+  }
+  .fi-blue { background: #0f62fe22; border: 1px solid #0f62fe44; }
+  .fi-green { background: #16a34a22; border: 1px solid #16a34a44; }
+  .fi-purple { background: #7c3aed22; border: 1px solid #7c3aed44; }
+  .fi-orange { background: #b4530922; border: 1px solid #b4530944; }
+  .feature-text h4 { font-size: 12px; font-weight: 700; color: #e2e8f0; margin-bottom: 1px; }
+  .feature-text p { font-size: 11px; color: #64748b; line-height: 1.4; }
+
+  .bob-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: #0f62fe; border-radius: 8px; padding: 8px 14px;
+    font-size: 12px; font-weight: 700; color: #fff; width: fit-content;
+    margin-top: 24px;
+  }
+  .bob-badge-icon { width: 20px; height: 20px; background: rgba(255,255,255,0.2); border-radius: 4px; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 11px; }
+
+  /* Right column */
+  .right {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .screen {
+    background: #13131f;
+    border: 1px solid #2d2d4e;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .screen-bar {
+    background: #1a1a2e;
+    padding: 6px 12px;
+    display: flex; align-items: center; gap: 6px;
+    border-bottom: 1px solid #2d2d4e;
+  }
+  .sb-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .sb-title { font-size: 10px; color: #64748b; font-weight: 600; margin-left: 6px; }
+  .sb-badge { margin-left: auto; font-size: 9px; color: #22c55e; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  /* Agent trace screen */
+  .trace-body { padding: 10px 12px; }
+  .agent-rows { display: flex; flex-direction: column; gap: 4px; }
+  .ar { display: flex; align-items: center; gap: 7px; }
+  .ar-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .d-done { background: #22c55e; }
+  .d-run { background: #f59e0b; }
+  .d-wait { background: #334155; }
+  .ar-name { font-size: 10px; color: #94a3b8; }
+  .ar-name.run { color: #fcd34d; font-weight: 600; }
+  .ar-name.done { color: #64748b; }
+  .ar-time { margin-left: auto; font-size: 9px; color: #4ade80; font-family: monospace; }
+  .ar-running { margin-left: auto; font-size: 9px; color: #f59e0b; }
+
+  /* KPI grid screen */
+  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 10px; }
+  .kpi-card {
+    background: #0d1117;
+    border: 1px solid #21262d;
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+  .kpi-label { font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }
+  .kpi-val { font-size: 16px; font-weight: 800; margin: 3px 0; }
+  .kpi-chg { font-size: 9px; font-weight: 700; }
+  .pos { color: #22c55e; }
+  .neg { color: #f87171; }
+  .kpi-c1 { color: #93c5fd; }
+  .kpi-c2 { color: #86efac; }
+  .kpi-c3 { color: #fcd34d; }
+  .kpi-c4 { color: #f9a8d4; }
+
+  /* Chat screen */
+  .chat-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+  .bubble { padding: 7px 10px; border-radius: 7px; font-size: 10px; line-height: 1.5; max-width: 90%; }
+  .bubble.user { background: #1e293b; border: 1px solid #334155; color: #94a3b8; align-self: flex-end; }
+  .bubble.bot { background: #0f1e3d; border: 1px solid #1d3a6e; color: #93c5fd; }
+  .bubble strong { color: #f8fafc; }
+
+  .screen-row { display: flex; gap: 12px; }
+  .screen-row .screen { flex: 1; }
+
+  /* Bottom bar */
+  .bottom-bar {
+    padding: 0 48px 20px;
+    display: flex; align-items: center; gap: 16px;
+    flex-shrink: 0;
+  }
+  .stat { text-align: center; }
+  .stat-val { font-size: 20px; font-weight: 800; color: #f8fafc; }
+  .stat-lbl { font-size: 9px; color: #475569; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 1px; }
+  .divider { width: 1px; height: 28px; background: #2d2d4e; }
+  .stack-row { display: flex; flex-wrap: wrap; gap: 5px; margin-left: auto; }
+  .stack-tag { background: #1e293b; border: 1px solid #334155; border-radius: 4px; padding: 2px 7px; font-size: 9px; color: #64748b; }
+</style>
+</head>
+<body>
+
+<div class="accent-bar"></div>
+
+<div class="layout">
+
+  <!-- LEFT -->
+  <div class="left">
+    <div>
+      <div class="brand">
+        <div class="brand-logo">FS</div>
+        <div class="brand-name"><span>Fin</span>Sight</div>
+        <div class="brand-tagline">Multi-Agent Financial Analysis Platform</div>
+      </div>
+
+      <div class="pills">
+        <span class="pill pill-blue">13 AI Agents</span>
+        <span class="pill pill-green">85 Tests Passing</span>
+        <span class="pill pill-purple">66 DAX Measures</span>
+        <span class="pill pill-orange">Apache 2.0</span>
+      </div>
+
+      <div class="features">
+        <div class="feature">
+          <div class="feature-icon fi-blue">🧠</div>
+          <div class="feature-text">
+            <h4>Virtual CFO Engine</h4>
+            <p>40-metric 6-level reverse-flow diagnostics — structured root-cause traces, not guesses</p>
+          </div>
+        </div>
+        <div class="feature">
+          <div class="feature-icon fi-green">📊</div>
+          <div class="feature-text">
+            <h4>Power BI Integration</h4>
+            <p>Self-contained .pbip project per job — 9-table star schema, zero gateway required</p>
+          </div>
+        </div>
+        <div class="feature">
+          <div class="feature-icon fi-purple">🧩</div>
+          <div class="feature-text">
+            <h4>DAG Orchestration</h4>
+            <p>Independent agents run in parallel; dependents start the moment inputs are ready</p>
+          </div>
+        </div>
+        <div class="feature">
+          <div class="feature-icon fi-orange">📝</div>
+          <div class="feature-text">
+            <h4>Verified Reports</h4>
+            <p>Taxonomy-anchored skeleton; every number bound to ledger — no LLM-improvised figures</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bob-badge">
+      <div class="bob-badge-icon">B</div>
+      Built end-to-end with IBM Bob
+    </div>
+  </div>
+
+  <!-- RIGHT -->
+  <div class="right">
+
+    <!-- Agent trace -->
+    <div class="screen">
+      <div class="screen-bar">
+        <div class="sb-dot" style="background:#ff5f57"></div>
+        <div class="sb-dot" style="background:#febc2e"></div>
+        <div class="sb-dot" style="background:#28c840"></div>
+        <span class="sb-title">Pipeline — Stage 2: Analysis</span>
+        <span class="sb-badge">● Live</span>
+      </div>
+      <div class="trace-body">
+        <div class="agent-rows">
+          <div class="ar"><div class="ar-dot d-done"></div><span class="ar-name done">IntakeAgent</span><span class="ar-time">0.3s ✓</span></div>
+          <div class="ar"><div class="ar-dot d-done"></div><span class="ar-name done">ExtractorAgent</span><span class="ar-time">1.2s ✓</span></div>
+          <div class="ar"><div class="ar-dot d-done"></div><span class="ar-name done">MapperAgent</span><span class="ar-time">2.1s ✓</span></div>
+          <div class="ar"><div class="ar-dot d-done"></div><span class="ar-name done">ReconcilerAgent</span><span class="ar-time">0.4s ✓</span></div>
+          <div class="ar"><div class="ar-dot d-run"></div><span class="ar-name run">RatioTrendAgent</span><span class="ar-running">running…</span></div>
+          <div class="ar"><div class="ar-dot d-run"></div><span class="ar-name run">ForecastAgent + RiskAnomalyAgent</span><span class="ar-running">parallel ↔</span></div>
+          <div class="ar"><div class="ar-dot d-wait"></div><span class="ar-name">InsightReasonerAgent → ReportWriterAgent</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- KPI + chat row -->
+    <div class="screen-row">
+
+      <div class="screen">
+        <div class="screen-bar">
+          <div class="sb-dot" style="background:#ff5f57"></div>
+          <div class="sb-dot" style="background:#febc2e"></div>
+          <div class="sb-dot" style="background:#28c840"></div>
+          <span class="sb-title">Executive Report — KPI Overview</span>
+        </div>
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-label">Revenue</div>
+            <div class="kpi-val kpi-c1">₹1,200</div>
+            <div class="kpi-chg pos">+8.0% YoY</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">EBITDA Margin</div>
+            <div class="kpi-val kpi-c2">14.1%</div>
+            <div class="kpi-chg neg">−4.1 pp</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Current Ratio</div>
+            <div class="kpi-val kpi-c3">2.11x</div>
+            <div class="kpi-chg pos">+0.22x</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Health Score</div>
+            <div class="kpi-val kpi-c4">72</div>
+            <div class="kpi-chg" style="color:#94a3b8;">/ 100 pts</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="screen">
+        <div class="screen-bar">
+          <div class="sb-dot" style="background:#ff5f57"></div>
+          <div class="sb-dot" style="background:#febc2e"></div>
+          <div class="sb-dot" style="background:#28c840"></div>
+          <span class="sb-title">Virtual CFO Chat</span>
+        </div>
+        <div class="chat-body">
+          <div class="bubble user">Why did EBITDA margin decline?</div>
+          <div class="bubble bot"><strong>Root cause (3/5):</strong> Revenue grew 8% but COGS grew 17% — raw material inflation outpaced top-line. Also freight surcharge spike (+₹45 Cr).
+          <br><br><strong>Investigate:</strong> supplier PO-rate variance log · freight incoterm breakdown.</div>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+<div class="bottom-bar">
+  <div class="stat"><div class="stat-val">13</div><div class="stat-lbl">AI Agents</div></div>
+  <div class="divider"></div>
+  <div class="stat"><div class="stat-val">3</div><div class="stat-lbl">Pipeline Stages</div></div>
+  <div class="divider"></div>
+  <div class="stat"><div class="stat-val">66</div><div class="stat-lbl">DAX Measures</div></div>
+  <div class="divider"></div>
+  <div class="stat"><div class="stat-val">85</div><div class="stat-lbl">Tests</div></div>
+  <div class="divider"></div>
+  <div class="stat"><div class="stat-val">40</div><div class="stat-lbl">CFO Metrics</div></div>
+  <div class="stack-row">
+    <span class="stack-tag">Python</span>
+    <span class="stack-tag">Flask</span>
+    <span class="stack-tag">Celery</span>
+    <span class="stack-tag">Redis</span>
+    <span class="stack-tag">Power BI</span>
+    <span class="stack-tag">OpenAI / Gemini</span>
+    <span class="stack-tag">Docker</span>
+    <span class="stack-tag">IBM Bob</span>
+  </div>
+</div>
+
+</body>
+</html>

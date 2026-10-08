@@ -64,7 +64,7 @@ class Config:
     WEB_SEARCH_LINES_PER_RESULT = int(os.environ.get("WEB_SEARCH_LINES_PER_RESULT", "6"))
     WEB_SEARCH_TIMEOUT_S = int(os.environ.get("WEB_SEARCH_TIMEOUT_S", "10"))
 
-    OCR_ENABLED = _bool("OCR_ENABLED", "false")
+    OCR_ENABLED = _bool("OCR_ENABLED", "true")
 
     MAX_CONTENT_LENGTH = 200 * 1024 * 1024  # 200MB per upload request
     MAX_REPLANS = 2

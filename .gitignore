@@ -46,3 +46,6 @@ desktop.ini
 # Ad hoc/manual validation scripts & logs
 scratch/
 *.log
+*.zip
+.zip
+

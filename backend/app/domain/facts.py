@@ -151,8 +151,13 @@ def load_facts_by_period(dataset_version_id: str) -> dict[date, dict[str, float]
 
     by_period: dict[date, dict[str, float]] = {}
     for period, accounts in grouped.items():
+        has_primary = any(c.role == "primary" for cands in accounts.values() for c in cands)
         resolved = {}
         for account_id, cands in accounts.items():
+            if has_primary:
+                cands = [c for c in cands if c.role == "primary"]
+                if not cands:
+                    continue
             if account_id in DUMPING_GROUND_ACCOUNTS:
                 primary = [c for c in cands if c.role == "primary"] or cands
                 resolved[account_id] = sum({c.row_key: c for c in primary}[k].value for k in {c.row_key for c in primary})

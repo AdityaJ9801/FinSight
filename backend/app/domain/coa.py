@@ -6,6 +6,12 @@ from __future__ import annotations
 
 import re
 
+# Special account id a mapper may return for a row that has no place in the canonical
+# ledger (a disclosure, ratio, count, sub-schedule breakdown, loan-by-loan list...). Such
+# rows produce no fact at all -- they used to be forced into BS.CA.OTHER at low confidence,
+# which summed hundreds of unrelated note rows into "other current assets".
+UNMAPPED = "UNMAPPED"
+
 # (id, name, statement, parent_id, normal_balance)
 CANONICAL_ACCOUNTS: list[tuple[str, str, str, str | None, str]] = [
     # --- Balance sheet: assets ---
@@ -141,23 +147,49 @@ LABEL_SYNONYMS: dict[str, str] = {
     "total revenue": "PL.TOTAL_INCOME",
     "cost of materials consumed": "PL.COGS",
     "cost of goods sold": "PL.COGS",
+    "cogs": "PL.COGS",
+    "cost of sales": "PL.COGS",
+    "cost of revenue": "PL.COGS",
+    "total cost of goods sold": "PL.COGS",
+    "total cogs": "PL.COGS",
     "purchases": "PL.COGS",
     "employee benefit expense": "PL.EMPLOYEE_COST",
     "employee benefits expense": "PL.EMPLOYEE_COST",
     "salaries and wages": "PL.EMPLOYEE_COST",
     "other expenses": "PL.OTHER_EXPENSES",
+    "total other expenses": "PL.OTHER_EXPENSES",
+    "net other expenses": "PL.OTHER_EXPENSES",
+    "net other income": "PL.OTHER_INCOME",
+    "total other income": "PL.OTHER_INCOME",
     "depreciation and amortization expense": "PL.DEPRECIATION",
     "depreciation and amortisation expense": "PL.DEPRECIATION",
     "depreciation": "PL.DEPRECIATION",
     "finance costs": "PL.FINANCE_COST",
     "interest expense": "PL.FINANCE_COST",
+    "operating expenses": "PL.TOTAL_EXPENSES",
+    "total operating expenses": "PL.TOTAL_EXPENSES",
+    "opex": "PL.TOTAL_EXPENSES",
+    "total opex": "PL.TOTAL_EXPENSES",
+    "net operating income": "PL.EBITDA",
+    "operating income": "PL.EBITDA",
+    "operating profit": "PL.EBITDA",
+    "operating profitloss": "PL.EBITDA",
+    "gross profit": "PL.EBITDA",
     "ebitda": "PL.EBITDA",
     "profit before tax": "PL.PBT",
     "pbt": "PL.PBT",
+    "tax": "PL.TAX",
+    "taxes": "PL.TAX",
+    "income tax": "PL.TAX",
+    "income taxes": "PL.TAX",
     "tax expense": "PL.TAX",
+    "total tax": "PL.TAX",
+    "taxes on income": "PL.TAX",
     "provision for tax": "PL.TAX",
+    "provision for taxation": "PL.TAX",
     "profit after tax": "PL.PAT",
     "net profit": "PL.PAT",
+    "net income": "PL.PAT",
     "profit for the year": "PL.PAT",
     "pat": "PL.PAT",
     # Schedule III P&L statements always end with an "Earnings per equity share" block
@@ -250,13 +282,90 @@ LABEL_SYNONYMS: dict[str, str] = {
     "dividend paid": "CF.DIVIDENDS_PAID",
     "dividends paid": "CF.DIVIDENDS_PAID",
     "dividends paid to equity shareholders": "CF.DIVIDENDS_PAID",
+    # Indian Schedule III statement lines
+    "profit loss before tax": "PL.PBT",
+    "profit loss for the year": "PL.PAT",
+    "profit loss for the period": "PL.PAT",
+    "earnings before interest tax depreciation": "PL.EBITDA",
+    "fixed assets tangible": "BS.NCA.PPE",
+    "fixed assets-tangible": "BS.NCA.PPE",
+    "tangible fixed assets": "BS.NCA.PPE",
+    "tangible assets": "BS.NCA.PPE",
+    "deferred tax liabilities": "BS.NCL.OTHER",
+    "long-term provisions": "BS.NCL.OTHER",
+    "long term provisions": "BS.NCL.OTHER",
+    "other long term liabilities": "BS.NCL.OTHER",
+    "non-current investments": "BS.NCA.OTHER",
+    "non current investments": "BS.NCA.OTHER",
+    "long-term loans and advances": "BS.NCA.OTHER",
+    "long term loans and advances": "BS.NCA.OTHER",
+    "short term loans and advances": "BS.CA.OTHER",
+    "short-term loans and advances": "BS.CA.OTHER",
+    "short term loans & advances": "BS.CA.OTHER",
+    "total i ii iii": "BS.TOTAL_EQUITY_LIAB",
+    "total iii iii": "BS.TOTAL_EQUITY_LIAB",
+    "total iiiiii": "BS.TOTAL_EQUITY_LIAB",
+    "total i ii": "BS.TOTAL_ASSETS",
+    "total iii": "BS.TOTAL_ASSETS",
+    "total 1 1i": "BS.TOTAL_ASSETS",
+    "total 11i": "BS.TOTAL_ASSETS",
+    "total 1 ii": "BS.TOTAL_ASSETS",
+    "current tax expense for current year": "PL.TAX",
+    "current tax expense": "PL.TAX",
+    "current tax": "PL.TAX",
+    "deferred tax": "PL.TAX",
+    "revenue from operations gross": UNMAPPED,
+    "gross revenue from operations": UNMAPPED,
+    "less excise duty": UNMAPPED,
+    "excise duty": UNMAPPED,
+    # Standard P&L & GAAP/IFRS captions
+    "gross sales": "PL.REVENUE",
+    "cogs": "PL.COGS",
+    "total cost of goods sold": "PL.COGS",
+    "gross profit": "PL.EBITDA",
+    "net operating income": "PL.EBITDA",
+    "operating income": "PL.EBITDA",
+    "net other income": "PL.OTHER_INCOME",
+    "net income": "PL.PAT",
+    "profit": "PL.PAT",
+    "other depreciation": "PL.DEPRECIATION",
+    "charitable contributions": "PL.OTHER_EXPENSES",
+    "travel expense": "PL.OTHER_EXPENSES",
+    "meals": "PL.OTHER_EXPENSES",
+    "employee meals": "PL.EMPLOYEE_COST",
+    "professional fees": "PL.OTHER_EXPENSES",
+    "total professional fees": "PL.OTHER_EXPENSES",
+    "accounting & finance": "PL.OTHER_EXPENSES",
+    "accounting finance": "PL.OTHER_EXPENSES",
+    "marketing": "PL.OTHER_EXPENSES",
+    "consulting expenses": "PL.OTHER_EXPENSES",
+    "legal corporate": "PL.OTHER_EXPENSES",
+    "legal-corporate": "PL.OTHER_EXPENSES",
+    "legal ip counsel": "PL.OTHER_EXPENSES",
+    "legal-ip counsel": "PL.OTHER_EXPENSES",
+    "office expenses": "PL.OTHER_EXPENSES",
+    "postage and delivery": "PL.OTHER_EXPENSES",
+    "dues and subscriptions": "PL.OTHER_EXPENSES",
+    "bank service charges": "PL.OTHER_EXPENSES",
+    "miscellaneous expense": "PL.OTHER_EXPENSES",
+    "car allowances": "PL.EMPLOYEE_COST",
+    "bad debt expense": "PL.OTHER_EXPENSES",
+    "payroll salary expense": "PL.EMPLOYEE_COST",
+    "total payroll salary expense": "PL.EMPLOYEE_COST",
+    "cogs salaries": "PL.COGS",
+    "cogs payroll taxes": "PL.COGS",
+    "cogs salaries-payroll expenses": "PL.COGS",
+    "cogs salaries payroll expenses": "PL.COGS",
+    "cogs supplies mfg": "PL.COGS",
+    "cogs consulting": "PL.COGS",
+    "cogs rd supplies": "PL.COGS",
+    "cogs variable overhead": "PL.COGS",
+    "cogs product testing": "PL.COGS",
+    "consumables cogs": "PL.COGS",
+    "total sm expenses": "PL.OTHER_EXPENSES",
+    "total other expenses": "PL.OTHER_EXPENSES",
+    "discounts": UNMAPPED,
 }
-
-# Special account id a mapper may return for a row that has no place in the canonical
-# ledger (a disclosure, ratio, count, sub-schedule breakdown, loan-by-loan list...). Such
-# rows produce no fact at all -- they used to be forced into BS.CA.OTHER at low confidence,
-# which summed hundreds of unrelated note rows into "other current assets".
-UNMAPPED = "UNMAPPED"
 
 # Labels whose meaning depends on the statement section they appear under ("Borrowings"
 # under Non-current liabilities vs Current liabilities). Resolved by contextual_account().
@@ -280,7 +389,9 @@ _PL_SECTION_ACCOUNTS = [
     ("income tax", "PL.TAX"),
 ]
 
-_LEADING_NOISE = re.compile(r"^(?:\(?[a-z]{1,4}\)|\(?[ivxlc]{1,5}\)|[a-z]\.|\d+[.)]|less:?|add:?)\s+", re.IGNORECASE)
+_ACCOUNT_CODE_NOISE = re.compile(r"^(?:income|expense|expenses|cogs|sales|revenue)\s+\d{3,5}\s+", re.IGNORECASE)
+_LEADING_NOISE = re.compile(r"^(?:\(?[a-z]{1,4}\)|\(?[ivxlc]{1,5}\)|[a-z]\.|\d+[.)]?|less:?|add:?|[•\*\-_.:]+)\s+", re.IGNORECASE)
+_TRAILING_FORMULA = re.compile(r"\s*\([0-9\sivxlc+\-*\/–—]+\)$", re.IGNORECASE)
 
 
 def section_side(section: str | None) -> str | None:
@@ -296,11 +407,14 @@ def section_side(section: str | None) -> str | None:
 def strip_label_noise(label: str) -> str:
     """'(a) Raw materials' -> 'Raw materials'; 'Less: Expenditure ...' -> 'Expenditure ...'."""
     out = label.strip()
-    for _ in range(3):
+    out = _ACCOUNT_CODE_NOISE.sub("", out).strip()
+    for _ in range(4):
         new = _LEADING_NOISE.sub("", out).strip()
         if new == out:
             break
         out = new
+    if not is_total_label(out):
+        out = _TRAILING_FORMULA.sub("", out).strip()
     return out
 
 
@@ -340,6 +454,7 @@ _UNIT_PATTERNS = [
     (re.compile(r"\bbillions?\b|\bbn\b", re.IGNORECASE), 1_000_000_000),
     (re.compile(r"\bmillions?\b|\bmn\b", re.IGNORECASE), 1_000_000),
     (re.compile(r"'000|\bthousands?\b|\bin\s+000s?\b|\(000\)", re.IGNORECASE), 1_000),
+    (re.compile(r"\bamount\s*\(\s*(?:rs|inr|₹)\.?\s*\)|\b(?:in|amount)\s+(?:rupees?|rs\.?|inr|₹)\b|\(\s*(?:rs|inr|₹)\.?\s*\)", re.IGNORECASE), 1.0),
 ]
 
 
@@ -358,7 +473,8 @@ def detect_unit_scale(text: str) -> float | None:
 # non-ledger facts, so they must never be added into the primary statement accounts.
 _SUPPORTING_SHEET_WORDS = ("ageing", "aging", "schedule", "note", "inventor", "loan", "borrowing", "tax",
                            "receivable", "payable", "debtor", "creditor", "register", "gst", "fixed asset",
-                           "ppe", "segment", "related part", "contingent", "lease", "employee", "share capital")
+                           "ppe", "segment", "related part", "contingent", "lease", "employee", "share capital",
+                           "record", "transaction", "detail")
 
 
 def sheet_role(table_name: str | None, doc_type: str | None, rule_hits: set[str]) -> str:
@@ -372,7 +488,14 @@ def sheet_role(table_name: str | None, doc_type: str | None, rule_hits: set[str]
         return "supporting"
     anchors = {"BS.TOTAL_ASSETS", "BS.TOTAL_EQUITY_LIAB", "PL.PAT", "PL.PBT", "PL.REVENUE", "CF.OPERATING",
                "CF.NET_CHANGE"}
-    if rule_hits & anchors and len(rule_hits) >= 3:
+    if rule_hits & anchors and len(rule_hits) >= 2:
+        return "primary"
+    core_statement_accounts = {
+        "BS.EQ.SHARE_CAPITAL", "BS.EQ.RESERVES", "BS.CL.TRADE_PAYABLES", "BS.CA.INVENTORY",
+        "BS.CA.TRADE_RECEIVABLES", "BS.CA.CASH", "PL.REVENUE", "PL.COGS", "PL.EMPLOYEE_COST",
+        "PL.OTHER_EXPENSES", "PL.DEPRECIATION", "PL.PAT", "PL.PBT"
+    }
+    if len(rule_hits & core_statement_accounts) >= 2:
         return "primary"
     if doc_type in ("balance_sheet", "pnl", "cash_flow", "trial_balance") and not name:
         return "primary"  # a single-table CSV/PDF classified as a statement
@@ -384,6 +507,8 @@ def lookup_prefix_synonym(label: str, statement_hint: str | None = None) -> str 
     longest multi-word synonym that the label starts with. Single-word keys ('sales',
     'purchases', 'basic') are excluded -- too easy to match the wrong line."""
     n = normalize_label(strip_label_noise(label))
+    if n.endswith(" gross") or " gross " in n:
+        return None
     best = None
     for key, account_id in LABEL_SYNONYMS.items():
         if " " not in key or not n.startswith(key + " "):
@@ -420,33 +545,38 @@ def normalize_label(label: str) -> str:
 def infer_statement_hint(table_name: str | None) -> str | None:
     """Only fires for sheets/tables unambiguously identifiable as one of the three primary
     statements -- supplementary schedules (ageing, inventory, loan notes, tax filings) stay
-    unrestricted since they legitimately reference concepts from more than one statement
-    (e.g. a tax note citing "Profit before tax"). Confirmed live: a real Cash Flow Statement
-    sheet's non-cash add-back rows ("Depreciation and amortisation expense", "Finance
-    costs", ...) reuse the EXACT label text of the corresponding P&L expense rows, so
-    without this, both resolve to the same PL.* account for the same period and get summed
-    together -- doubling the real expense and badly corrupting the PL_SUBTOTALS reconciliation
-    check (and every ratio/insight computed from PL.* metrics)."""
+    unrestricted since they legitimately reference concepts from more than one statement."""
     if not table_name:
         return None
     name = table_name.strip().lower()
-    if "cash flow" in name:
+    tokens = set(name.replace("-", "_").split("_"))
+    if "cash flow" in name or "cash_flow" in name or "cf" in tokens:
         return "CF"
-    if "balance sheet" in name:
+    if "balance sheet" in name or "balance_sheet" in name or "bs" in tokens:
         return "BS"
-    if "profit and loss" in name or "profit & loss" in name or "p&l" in name or "p & l" in name or "income statement" in name:
+    if any(k in name for k in ("profit and loss", "profit & loss", "p&l", "p & l", "income statement", "pnl")) or "pl" in tokens:
         return "PL"
     return None
+
+
+ACCOUNT_NAMES: dict[str, str] = {acc_id: name for acc_id, name, _, _, _ in CANONICAL_ACCOUNTS}
+
+
+def get_account_name(account_id: str) -> str:
+    if account_id in ACCOUNT_NAMES:
+        return ACCOUNT_NAMES[account_id]
+    if account_id == UNMAPPED:
+        return "Unmapped Line Item"
+    return account_id
 
 
 def lookup_synonym(label: str, statement_hint: str | None = None) -> str | None:
     account_id = LABEL_SYNONYMS.get(normalize_label(label)) or LABEL_SYNONYMS.get(normalize_label(strip_label_noise(label)))
     if account_id is None:
         return None
+    if account_id == UNMAPPED:
+        return UNMAPPED
     if statement_hint is not None and ACCOUNT_STATEMENT.get(account_id) != statement_hint:
-        # Same label text, wrong statement for this sheet (e.g. a CF add-back row that
-        # happens to repeat a PL expense's name) -- reject the rule match so it falls
-        # through to the LLM fallback (also statement-scoped) instead of silently
-        # colliding with the real fact from the sheet it actually belongs to.
         return None
     return account_id
+

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import json
 import re
 from datetime import date, datetime
@@ -73,6 +74,20 @@ def _parse_period(value: str) -> date | None:
             except ValueError:
                 pass
 
+    # 4.5. Match Month range or Month Year e.g. 'JAN - DEC 2019', 'January to December 2020', 'Apr - Mar 2022', 'December 2020'
+    m_mrange = re.search(r"(?:[A-Za-z]{3,9}\s*[-–to/]+\s*)?([A-Za-z]{3,9})\s+(\d{4})", cleaned, re.IGNORECASE)
+    if m_mrange:
+        end_month_str, year_str = m_mrange.groups()
+        for mfmt in ("%b", "%B"):
+            try:
+                m_dt = datetime.strptime(f"{end_month_str} {year_str}", f"{mfmt} %Y")
+                y = m_dt.year
+                m_num = m_dt.month
+                last_day = calendar.monthrange(y, m_num)[1]
+                return date(y, m_num, last_day)
+            except ValueError:
+                pass
+
     # 5. Match Fiscal year range like 'FY2025-26', 'FY 2025-2026', 'FY25-26', '2025-26'
     m_fy = re.search(r"(?:FY\s*)?(\d{2,4})[-–/](\d{2,4})", cleaned, re.IGNORECASE)
     if m_fy:
@@ -122,6 +137,9 @@ class SchemaMapperAgent(WorkerAgent):
         # lookup below to that statement's accounts, so a cash flow sheet's add-back rows
         # ("Depreciation and amortisation expense") can't land in the P&L account.
         statement_hint = infer_statement_hint(table_name)
+        if statement_hint is None and doc is not None:
+            doc_type_map = {"pnl": "PL", "balance_sheet": "BS", "cash_flow": "CF"}
+            statement_hint = doc_type_map.get(doc.doc_type) or infer_statement_hint(doc.original_filename)
 
         resolved: dict[int, tuple[str, float, str]] = {}  # row idx -> (account_id, confidence, method)
         for i, row in enumerate(rows):
@@ -133,35 +151,38 @@ class SchemaMapperAgent(WorkerAgent):
         # Supporting rows only ever confirm statement lines; they're never added into them.
         role = sheet_role(table_name, doc.doc_type, {acc for acc, _c, _m in resolved.values()})
 
-        unresolved_idx: list[int] = []
-        for i, row in enumerate(rows):
-            if i in resolved:
-                continue
-            label = row["label"]
-            if _GENERIC_SUBTOTAL.match(normalize_label(label)):
-                resolved[i] = (UNMAPPED, 1.0, "subtotal")  # 'Subtotal' says nothing about its account
-                continue
-            if role == "supporting":
-                resolved[i] = (UNMAPPED, 1.0, "supporting")
-                continue
-            if statement_hint == "CF":
-                # The canonical cash-flow accounts are only section totals and cash lines (all
-                # rule-matched); an adjustment row must not be guessed into CF.OPERATING.
-                resolved[i] = (UNMAPPED, 1.0, "cf_detail")
-                continue
-            if statement_hint in (None, "BS") and not is_total_label(label):
-                bucket = section_other_bucket(row.get("section"))
-                if bucket:
-                    # An unrecognised line inside a known balance-sheet section belongs to that
-                    # section's 'other' bucket -- decided by structure, not guessed.
-                    resolved[i] = (bucket, 0.9, "section")
+        if role == "supporting":
+            for i, row in enumerate(rows):
+                if not is_total_label(row["label"]) or i not in resolved:
+                    resolved[i] = (UNMAPPED, 1.0, "supporting")
+            unresolved_idx = []
+        else:
+            unresolved_idx: list[int] = []
+            for i, row in enumerate(rows):
+                if i in resolved:
                     continue
-            existing = lookup_memory(spec.tenant_id, doc.layout_id, label)
-            if (existing and existing.confidence >= self.REVIEW_THRESHOLD and existing.account_id in ACCOUNT_STATEMENT
-                    and (statement_hint is None or ACCOUNT_STATEMENT.get(existing.account_id) == statement_hint)):
-                resolved[i] = (existing.account_id, existing.confidence, "memory")
-                continue
-            unresolved_idx.append(i)
+                label = row["label"]
+                if _GENERIC_SUBTOTAL.match(normalize_label(label)):
+                    resolved[i] = (UNMAPPED, 1.0, "subtotal")  # 'Subtotal' says nothing about its account
+                    continue
+                if statement_hint == "CF":
+                    # The canonical cash-flow accounts are only section totals and cash lines (all
+                    # rule-matched); an adjustment row must not be guessed into CF.OPERATING.
+                    resolved[i] = (UNMAPPED, 1.0, "cf_detail")
+                    continue
+                if statement_hint in (None, "BS") and not is_total_label(label):
+                    bucket = section_other_bucket(row.get("section"))
+                    if bucket:
+                        # An unrecognised line inside a known balance-sheet section belongs to that
+                        # section's 'other' bucket -- decided by structure, not guessed.
+                        resolved[i] = (bucket, 0.9, "section")
+                        continue
+                existing = lookup_memory(spec.tenant_id, doc.layout_id, label)
+                if (existing and existing.confidence >= self.REVIEW_THRESHOLD and existing.account_id in ACCOUNT_STATEMENT
+                        and (statement_hint is None or ACCOUNT_STATEMENT.get(existing.account_id) == statement_hint)):
+                    resolved[i] = (existing.account_id, existing.confidence, "memory")
+                    continue
+                unresolved_idx.append(i)
 
         llm_calls = 0
         if unresolved_idx:
@@ -234,6 +255,8 @@ class SchemaMapperAgent(WorkerAgent):
                           "role": role, "method": method, "is_total": is_total_label(row["label"])}
             for period_str, value in row["values"].items():
                 period_end = _parse_period(period_str)
+                if period_end is None and doc.period_end:
+                    period_end = doc.period_end
                 if period_end is None:
                     continue
                 db.session.add(FinancialFact(

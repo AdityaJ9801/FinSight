@@ -55,9 +55,30 @@ def exceptional_effect(f: dict) -> tuple[float, str]:
 
 def pl_expenses(f: dict) -> tuple[float | None, str]:
     """Total expenses: the stated total when reported, else the sum of expense lines net of
-    expenditure transferred to capital."""
+    expenditure transferred to capital. In multi-step income statements, stated 'Total Expenses'
+    often represents Operating Expenses (SG&A) and excludes Cost of Goods Sold; this detects
+    whether COGS must be added to reach true total expenses."""
     if "PL.TOTAL_EXPENSES" in f:
-        return f["PL.TOTAL_EXPENSES"], "stated"
+        total = f["PL.TOTAL_EXPENSES"]
+        cogs = f.get("PL.COGS", 0.0)
+        if cogs > 0:
+            cogs_excluded = False
+            if total < cogs:
+                # Total expenses cannot be smaller than one of its positive line items
+                cogs_excluded = True
+            elif any(k in f for k in ("PL.PAT", "PL.PBT", "PL.PBEIT")):
+                target = f.get("PL.PAT") if "PL.PAT" in f else (f.get("PL.PBT") if "PL.PBT" in f else f.get("PL.PBEIT"))
+                inc = pl_income(f)
+                if inc is not None and target is not None:
+                    tax = f.get("PL.TAX", 0.0) if "PL.PAT" in f else 0.0
+                    other_inc = f.get("PL.OTHER_INCOME", 0.0)
+                    err_without_cogs = abs((inc - total + other_inc - tax) - target)
+                    err_with_cogs = abs((inc - (total + cogs) + other_inc - tax) - target)
+                    if err_with_cogs < err_without_cogs:
+                        cogs_excluded = True
+            if cogs_excluded:
+                return total + cogs, "stated operating expenses + COGS"
+        return total, "stated"
     if not any(k in f for k in EXPENSE_LINES):
         return None, "missing"
     return sum(f.get(k, 0.0) for k in EXPENSE_LINES) - f.get("PL.EXPENSES_CAPITALISED", 0.0), "sum of lines"
@@ -75,10 +96,15 @@ def pl_pbeit(f: dict) -> tuple[float | None, str]:
     """Profit before exceptional items and tax: stated, else income - expenses."""
     if "PL.PBEIT" in f:
         return f["PL.PBEIT"], "stated"
-    income, (expenses, _how) = pl_income(f), pl_expenses(f)
+    income, (expenses, how) = pl_income(f), pl_expenses(f)
     if income is None or expenses is None:
         return None, "missing"
-    return income - expenses, "recomputed"
+    base = income - expenses
+    if "PL.TOTAL_INCOME" in f and "PL.OTHER_INCOME" in f:
+        # If TOTAL_INCOME matches REVENUE (operating sales only), add separately stated other income
+        if "PL.REVENUE" in f and _within_tolerance(f["PL.TOTAL_INCOME"], f["PL.REVENUE"]):
+            base += f["PL.OTHER_INCOME"]
+    return base, how if "COGS" in how else "recomputed"
 
 
 def _result(code: str, expected: float, actual: float, rule: str, **details) -> dict:
@@ -102,9 +128,11 @@ def check_pl_cascade(f: dict) -> list[dict]:
     if "PL.PAT" not in f and "PL.REVENUE" not in f:
         return []
     out: list[dict] = []
+    income, (expenses, how) = pl_income(f), pl_expenses(f)
     if "PL.TOTAL_EXPENSES" in f and any(k in f for k in EXPENSE_LINES):
         lines = sum(f.get(k, 0.0) for k in EXPENSE_LINES) - f.get("PL.EXPENSES_CAPITALISED", 0.0)
-        r = _result("PL_EXPENSE_LINES", lines, f["PL.TOTAL_EXPENSES"],
+        target_expenses = expenses if (expenses is not None and "COGS" in how) else f["PL.TOTAL_EXPENSES"]
+        r = _result("PL_EXPENSE_LINES", lines, target_expenses,
                     "Expense lines - expenditure capitalised = total expenses",
                     hint="a gap is an expense caption with no canonical line; profit still ties to the stated total")
         if r["status"] == "fail":
@@ -112,7 +140,6 @@ def check_pl_cascade(f: dict) -> list[dict]:
             # total expenses, and the bridge shows the gap as 'Other expense captions'.
             r["status"] = "warn"
         out.append(r)
-    income, (expenses, how) = pl_income(f), pl_expenses(f)
     if "PL.PBEIT" in f and income is not None and expenses is not None:
         out.append(_result("PL_OPERATING", income - expenses, f["PL.PBEIT"],
                            "Total income - total expenses = profit before exceptional items and tax",
@@ -134,6 +161,10 @@ def check_pl_cascade(f: dict) -> list[dict]:
     else:
         effect, effect_how = exceptional_effect(f)
         recomputed = pbeit + effect - f["PL.TAX"]
+        # If operating expenses was used and tax was already embedded inside operating expenses,
+        # don't deduct tax a second time if pbeit + effect already ties to stated PAT.
+        if "COGS" in pbeit_how and abs(pbeit + effect - f["PL.PAT"]) < abs(recomputed - f["PL.PAT"]):
+            recomputed = pbeit + effect
         out.append(_result("PL_SUBTOTALS", recomputed, f["PL.PAT"], "Recomputed PAT = stated PAT",
                            pbeit_basis=pbeit_how, exceptional_sign=effect_how))
     return out
