@@ -96,6 +96,25 @@ def create_app(config_class: type = Config) -> Flask:
             except Exception as exc:  # the database may not exist yet (before init-db)
                 app.logger.debug("job_profiles check skipped: %s", exc)
 
+    @app.get("/")
+    def index():
+        return {
+            "name": "FinSight Multi-Agent Financial Analysis Platform API",
+            "status": "online",
+            "version": "1.0.0",
+            "health": "/api/health",
+            "endpoints": {
+                "health": "/api/health",
+                "jobs": "/api/jobs",
+                "qa": "/api/qa",
+                "benchmarks": "/api/benchmarks",
+                "llm_status": "/api/llm/status",
+            },
+            "message": "API is active. Open the web frontend or query /api endpoints.",
+        }
+
+    @app.get("/healthz")
+    @app.get("/health")
     @app.get("/api/health")
     def health():
         return {"status": "ok"}
