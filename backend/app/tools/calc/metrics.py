@@ -59,64 +59,81 @@ def cash_ratio(f):
 
 # --- Leverage ---
 
-@metric("debt_to_equity", "1.0", "x",
-        ["BS.CL.SHORT_TERM_BORROWINGS", "BS.NCL.LONG_TERM_BORROWINGS", "BS.EQ.TOTAL"], "ratio")
+@metric("debt_to_equity", "1.0", "x", ["BS.EQ.TOTAL"], "ratio")
 def debt_to_equity(f):
-    debt = f["BS.CL.SHORT_TERM_BORROWINGS"] + f["BS.NCL.LONG_TERM_BORROWINGS"]
-    return safe_div(debt, f["BS.EQ.TOTAL"])
+    debt = f.get("BS.CL.SHORT_TERM_BORROWINGS", 0.0) + f.get("BS.NCL.LONG_TERM_BORROWINGS", 0.0)
+    return safe_div(debt, f.get("BS.EQ.TOTAL"))
 
 
 def operating_expenses(f) -> float:
     """Expenses before depreciation and finance costs. Uses the statement's own total
-    expenses when reported (so no expense caption is missed); otherwise every expense line,
-    including purchases of stock-in-trade and changes in inventories, net of expenditure
-    transferred to capital -- EBITDA previously ignored those three and overstated profit."""
+    expenses when reported; otherwise every expense line."""
     if "PL.TOTAL_EXPENSES" in f:
         return f["PL.TOTAL_EXPENSES"] - f.get("PL.DEPRECIATION", 0.0) - f.get("PL.FINANCE_COST", 0.0)
-    return (f["PL.COGS"] + f.get("PL.PURCHASES_STOCK_IN_TRADE", 0.0) + f.get("PL.CHANGES_IN_INVENTORY", 0.0)
-            + f["PL.EMPLOYEE_COST"] + f["PL.OTHER_EXPENSES"] - f.get("PL.EXPENSES_CAPITALISED", 0.0))
+    return (f.get("PL.COGS", 0.0) + f.get("PL.PURCHASES_STOCK_IN_TRADE", 0.0) + f.get("PL.CHANGES_IN_INVENTORY", 0.0)
+            + f.get("PL.EMPLOYEE_COST", 0.0) + f.get("PL.OTHER_EXPENSES", 0.0) - f.get("PL.EXPENSES_CAPITALISED", 0.0))
 
 
-def _ebitda(f) -> float:
-    return f["PL.REVENUE"] + f["PL.OTHER_INCOME"] - operating_expenses(f)
+def _ebitda(f) -> float | None:
+    if "PL.EBITDA" in f and f["PL.EBITDA"] is not None:
+        return f["PL.EBITDA"]
+    rev = f.get("PL.REVENUE")
+    if rev is None:
+        return None
+    other_inc = f.get("PL.OTHER_INCOME", 0.0)
+    if "PL.GROSS_PROFIT" in f and f["PL.GROSS_PROFIT"] is not None:
+        gp = f["PL.GROSS_PROFIT"]
+        opex = f.get("PL.TOTAL_EXPENSES")
+        if opex is None:
+            opex = f.get("PL.EMPLOYEE_COST", 0.0) + f.get("PL.OTHER_EXPENSES", 0.0)
+        return gp + other_inc - opex
+
+    if "PL.TOTAL_EXPENSES" in f and f["PL.TOTAL_EXPENSES"] is not None:
+        tot_exp = f["PL.TOTAL_EXPENSES"]
+        cogs = f.get("PL.COGS", 0.0)
+        depr = f.get("PL.DEPRECIATION", 0.0)
+        fin = f.get("PL.FINANCE_COST", 0.0)
+        if cogs > 0 and tot_exp < cogs:
+            return rev + other_inc - cogs - (tot_exp - depr - fin)
+        return rev + other_inc - (tot_exp - depr - fin)
+
+    return rev + other_inc - operating_expenses(f)
 
 
-@metric("ebitda", "1.0", "INR",
-        ["PL.REVENUE", "PL.OTHER_INCOME", "PL.COGS", "PL.EMPLOYEE_COST", "PL.OTHER_EXPENSES"], "ratio")
+@metric("ebitda", "1.0", "INR", ["PL.REVENUE"], "ratio")
 def ebitda(f):
     return _ebitda(f)
 
 
-@metric("interest_coverage", "1.0", "x",
-        ["PL.REVENUE", "PL.OTHER_INCOME", "PL.COGS", "PL.EMPLOYEE_COST", "PL.OTHER_EXPENSES", "PL.FINANCE_COST"],
-        "ratio")
+@metric("interest_coverage", "1.0", "x", ["PL.REVENUE", "PL.FINANCE_COST"], "ratio")
 def interest_coverage(f):
-    return safe_div(_ebitda(f), f["PL.FINANCE_COST"])
+    eb = _ebitda(f)
+    return safe_div(eb, f.get("PL.FINANCE_COST"))
 
 
-@metric("dscr", "1.0", "x",
-        ["PL.PBT", "PL.FINANCE_COST", "PL.DEPRECIATION", "BS.NCL.LONG_TERM_BORROWINGS"], "ratio")
+@metric("dscr", "1.0", "x", ["PL.PBT", "PL.FINANCE_COST"], "ratio")
 def dscr(f):
-    # Simplified DSCR: (PBT + interest + depreciation) / (interest + a proxy for principal
-    # repayment). Without an amortization schedule we can't know principal due this period,
-    # so we use finance cost alone as the debt-service proxy -- documented simplification.
-    numerator = f["PL.PBT"] + f["PL.FINANCE_COST"] + f["PL.DEPRECIATION"]
-    return safe_div(numerator, f["PL.FINANCE_COST"])
+    pbt = f.get("PL.PBT", 0.0)
+    fin = f.get("PL.FINANCE_COST", 0.0)
+    depr = f.get("PL.DEPRECIATION", 0.0)
+    numerator = pbt + fin + depr
+    return safe_div(numerator, fin)
 
 
 # --- Profitability ---
 
-@metric("gross_profit_pct", "1.0", "%", ["PL.REVENUE", "PL.COGS"], "ratio")
+@metric("gross_profit_pct", "1.0", "%", ["PL.REVENUE"], "ratio")
 def gross_profit_pct(f):
-    # cost of goods sold = materials consumed + purchases of stock-in-trade + change in inventories
-    cogs = f["PL.COGS"] + f.get("PL.PURCHASES_STOCK_IN_TRADE", 0.0) + f.get("PL.CHANGES_IN_INVENTORY", 0.0)
+    if "PL.GROSS_PROFIT" in f and f["PL.GROSS_PROFIT"] is not None:
+        return safe_div(f["PL.GROSS_PROFIT"], f.get("PL.REVENUE"))
+    cogs = f.get("PL.COGS", 0.0) + f.get("PL.PURCHASES_STOCK_IN_TRADE", 0.0) + f.get("PL.CHANGES_IN_INVENTORY", 0.0)
     return safe_div(f["PL.REVENUE"] - cogs, f["PL.REVENUE"])
 
 
-@metric("ebitda_margin", "1.0", "%",
-        ["PL.REVENUE", "PL.OTHER_INCOME", "PL.COGS", "PL.EMPLOYEE_COST", "PL.OTHER_EXPENSES"], "ratio")
+@metric("ebitda_margin", "1.0", "%", ["PL.REVENUE"], "ratio")
 def ebitda_margin(f):
-    return safe_div(_ebitda(f), f["PL.REVENUE"])
+    eb = _ebitda(f)
+    return safe_div(eb, f.get("PL.REVENUE"))
 
 
 @metric("net_profit_margin", "1.0", "%", ["PL.PAT", "PL.REVENUE"], "ratio")
@@ -211,11 +228,12 @@ def net_cash_after_investing(f):
 
 # --- Detailed statement analysis (detailed_analytics group) ---
 
-@metric("ebit", "1.0", "INR",
-        ["PL.REVENUE", "PL.OTHER_INCOME", "PL.COGS", "PL.EMPLOYEE_COST", "PL.OTHER_EXPENSES", "PL.DEPRECIATION"],
-        "detailed_analytics")
+@metric("ebit", "1.0", "INR", ["PL.REVENUE"], "detailed_analytics")
 def ebit(f):
-    return _ebitda(f) - f["PL.DEPRECIATION"]
+    eb = _ebitda(f)
+    if eb is None:
+        return None
+    return eb - f.get("PL.DEPRECIATION", 0.0)
 
 
 @metric("equity_multiplier", "1.0", "x", ["BS.TOTAL_ASSETS", "BS.EQ.TOTAL"], "detailed_analytics")
@@ -248,25 +266,27 @@ def working_capital(f):
     return f["BS.CA.TOTAL"] - f["BS.CL.TOTAL"]
 
 
-@metric("net_debt", "1.0", "INR",
-        ["BS.CL.SHORT_TERM_BORROWINGS", "BS.NCL.LONG_TERM_BORROWINGS", "BS.CA.CASH"], "detailed_analytics")
+@metric("net_debt", "1.0", "INR", ["BS.CA.CASH"], "detailed_analytics")
 def net_debt(f):
-    return f["BS.CL.SHORT_TERM_BORROWINGS"] + f["BS.NCL.LONG_TERM_BORROWINGS"] - f["BS.CA.CASH"]
+    short_b = f.get("BS.CL.SHORT_TERM_BORROWINGS", 0.0)
+    long_b = f.get("BS.NCL.LONG_TERM_BORROWINGS", 0.0)
+    cash = f.get("BS.CA.CASH", 0.0)
+    return (short_b + long_b) - cash
 
 
-@metric("net_debt_to_ebitda", "1.0", "x",
-        ["BS.CL.SHORT_TERM_BORROWINGS", "BS.NCL.LONG_TERM_BORROWINGS", "BS.CA.CASH",
-         "PL.REVENUE", "PL.OTHER_INCOME", "PL.COGS", "PL.EMPLOYEE_COST", "PL.OTHER_EXPENSES"], "detailed_analytics")
+@metric("net_debt_to_ebitda", "1.0", "x", ["BS.CA.CASH", "PL.REVENUE"], "detailed_analytics")
 def net_debt_to_ebitda(f):
-    return safe_div(net_debt(f), _ebitda(f))
+    eb = _ebitda(f)
+    return safe_div(net_debt(f), eb)
 
 
-@metric("ebitda_growth_yoy", "1.0", "%",
-        ["PL.REVENUE", "PL.OTHER_INCOME", "PL.COGS", "PL.EMPLOYEE_COST", "PL.OTHER_EXPENSES"], "detailed_analytics",
-        periods_needed=2)
+@metric("ebitda_growth_yoy", "1.0", "%", ["PL.REVENUE"], "detailed_analytics", periods_needed=2)
 def ebitda_growth_yoy(f_curr, f_prev):
+    cur = _ebitda(f_curr)
     prev = _ebitda(f_prev)
-    return safe_div(_ebitda(f_curr) - prev, abs(prev) if prev else None)
+    if cur is None or prev is None:
+        return None
+    return safe_div(cur - prev, abs(prev) if prev else None)
 
 
 def compute_all(facts_by_period: dict[date, dict[str, float]]) -> list[dict]:

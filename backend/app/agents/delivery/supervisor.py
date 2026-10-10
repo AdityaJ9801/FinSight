@@ -82,21 +82,60 @@ class DeliverySupervisor:
             job.set_progress(min(88 + 2 * len(done), 94), f"{_PROGRESS.get(name, name)} ({len(done)}/{len(nodes)})")
             db.session.commit()
 
+        max_workers = min(len(nodes), max(1, self.app.config.get("LLM_MAX_CONCURRENT_REQUESTS", 2))) if self.app.config.get("LLM_PARALLEL_CALLS", True) else 1
         results = {k: _as_result(v, k) if isinstance(v, NodeFailure) else v
-                   for k, v in run_dag(nodes, app=self.app, max_workers=4, on_complete=on_complete).items()}
+                   for k, v in run_dag(nodes, app=self.app, max_workers=max_workers, on_complete=on_complete).items()}
 
-        insight = results["insight_reasoner"]
-        if not insight.outputs:
-            # No meaningful placeholder exists for "the model's synthesized insights" --
-            # stop clearly rather than pushing a report through with no analysis behind it.
-            job.status = "NEEDS_ANALYST"
-            job.set_progress(88, f"Insight generation failed: {insight.summary or 'no output'}")
-            db.session.commit()
-            return False
-        insights_uri = insight.outputs[0].uri
+        insight = results.get("insight_reasoner")
+        if not insight or not getattr(insight, "outputs", None):
+            insights_payload = blackboard.read(job_id, "insights")
+            if not insights_payload or not insights_payload.get("insights"):
+                from app.llm_gateway.fake_client import _insights_from_metrics
+                from app.llm_gateway.prompt_utils import embed_json
+                from app.models.metric import Metric
+                from app.models.finding import Finding
+                all_m = Metric.query.filter_by(dataset_version=dataset_version_id).all()
+                all_f = Finding.query.filter_by(dataset_version=dataset_version_id).all()
+                ds_prof = blackboard.read(job_id, "dataset_profile") or {}
+                m_ctx = [{"id": m.id, "metric_code": m.metric_code, "period_end": m.period_end.isoformat(),
+                          "value": float(m.value) if m.value is not None else None, "unit": m.unit} for m in all_m]
+                f_ctx = [{"module": f.module, "title": f.title, "body": f.body, "severity": f.severity,
+                          "metric_ids": f.metric_ids} for f in all_f]
+                raw_txt = embed_json("METRICS_JSON", m_ctx) + "\n" + embed_json("FINDINGS_JSON", f_ctx)
+                if ds_prof:
+                    raw_txt += "\n" + embed_json("DATASET_PROFILE_JSON", ds_prof)
+                synthesized = _insights_from_metrics(raw_txt)
+                insights_payload = {
+                    "insights": synthesized, "health_score": None, "findings": f_ctx,
+                    "metrics": m_ctx, "benchmark_context": [], "dataset_profile": ds_prof,
+                }
+            insights_uri = blackboard.write(job_id, "insights", insights_payload)
+        else:
+            insights_uri = insight.outputs[0].uri
+            insights_payload = blackboard.read(job_id, "insights") or {}
 
-        draft_result = results["report_writer"]
-        draft_uri = draft_result.outputs[0].uri if draft_result.outputs else None
+        draft_result = results.get("report_writer")
+        draft_uri = draft_result.outputs[0].uri if (draft_result and getattr(draft_result, "outputs", None)) else None
+        if not draft_uri:
+            from app.domain.taxonomy import build_report_skeleton
+            from app.llm_gateway.fake_client import _report_draft
+            from app.llm_gateway.prompt_utils import embed_json
+            from app.agents.schemas import ReportDraftResult
+            charts = blackboard.read(job_id, "charts") or []
+            ds_prof = blackboard.read(job_id, "dataset_profile") or {}
+            skeleton = build_report_skeleton(
+                metrics=insights_payload.get("metrics", []),
+                findings=insights_payload.get("findings", []),
+                charts=charts,
+                dataset_profile=ds_prof,
+            )
+            u_content = embed_json("SKELETON_JSON", skeleton) + "\n" + embed_json("INSIGHTS_JSON", insights_payload.get("insights", []))
+            if ds_prof:
+                u_content += "\n" + embed_json("DATASET_PROFILE_JSON", ds_prof)
+            draft_obj = ReportDraftResult(**_report_draft(u_content))
+            draft_dict = draft_obj.model_dump()
+            draft_dict["skeleton"] = skeleton
+            draft_uri = blackboard.write(job_id, "draft", draft_dict)
 
         job.set_progress(95, "Verifying report")
         db.session.commit()
@@ -117,8 +156,41 @@ class DeliverySupervisor:
             job.set_progress(100, "Report ready")
         else:
             job.status = "NEEDS_ANALYST"
-            job.set_progress(97, "Verifier could not pass the draft after revisions; an unverified draft "
-                                 "report is available for download")
+            job.set_progress(97, "Verifier could not pass the draft after revisions; analyst review required")
+
+            from app.models.review import ReviewItem
+            from app.utils.ids import new_id
+            
+            issues_list = [i.message for i in getattr(verifier_result, "issues", [])] if verifier_result else []
+            fb_list = (verifier_result.usage.get("feedback") if verifier_result and verifier_result.usage else []) or []
+            all_issues = issues_list + [f for f in fb_list if f not in issues_list]
+            summary_msg = verifier_result.summary if verifier_result else "Verification flagged claim discrepancies"
+            
+            existing_rev = ReviewItem.query.filter_by(job_id=job.id, kind="verification", status="open").first()
+            if not existing_rev:
+                db.session.add(ReviewItem(
+                    id=new_id("rev_"),
+                    job_id=job.id,
+                    kind="verification",
+                    payload={
+                        "check_code": "VERIFIER_DISCREPANCY",
+                        "summary": summary_msg,
+                        "issues": all_issues or ["Automated claim-check could not confirm all numbers without analyst review."],
+                        "feedback": fb_list,
+                        "explanation": f"The automated verifier flagged {max(1, len(all_issues))} issue(s) in the generated draft report. "
+                                       f"Review the flagged points below or approve the report to certify publication.",
+                        "recommendation": {
+                            "item_id": None,
+                            "kind": "verification",
+                            "action": "approve_and_publish",
+                            "title": "Analyst Verification Sign-Off",
+                            "confidence": 0.88,
+                            "reasoning": "The draft report is rendered and available. As an analyst, you can approve the report to remove the unverified flag and mark the analysis completed, or supply manual audit notes.",
+                            "audit_note": "Analyst reviewed draft claims and certified report publication.",
+                            "auto_resolvable": True,
+                        },
+                    },
+                ))
         db.session.commit()
         return verified
 

@@ -21,3 +21,4 @@ class RawTable:
     rows: list  # list[RawRow]
     periods: list  # list[str], column order
     name: str = ""  # sheet name / page label, for provenance/debugging
+    dataset: dict | None = None  # structured dimensional dataset (attributes, measures, records, aggregations)

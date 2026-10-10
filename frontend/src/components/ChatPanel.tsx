@@ -7,7 +7,7 @@ import { api } from "../lib/api";
 import { refreshResults } from "../lib/hooks";
 import { agentDef, isActive } from "../lib/pipeline";
 import { METRICS, metricLabel } from "../lib/format";
-import type { Instruction, Job } from "../lib/types";
+import type { Chart, Instruction, Job } from "../lib/types";
 import { Spinner } from "./ui";
 
 interface Option { label: string; description: string; agent: string }
@@ -21,6 +21,7 @@ interface Msg {
   citations?: string[];
   options?: Option[];
   answered?: boolean;
+  chart?: Chart;
 }
 
 /** Citations are metric codes or internal ids; show the readable name where there is one. */
@@ -69,6 +70,7 @@ export function ChatPanel({ job, instructions, onClose }: { job: Job; instructio
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState("Working it out…");
   const [auto, setAuto] = useState(() => localStorage.getItem(AUTO_KEY) === "1");
+  const [chatZoom, setChatZoom] = useState<Chart | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const qc = useQueryClient();
@@ -98,7 +100,10 @@ export function ChatPanel({ job, instructions, onClose }: { job: Job; instructio
         await runAssistant({ message: payload.message, force: true });
         return;
       }
-      push({ role: "assistant", text: qa.answer, citations: qa.citations });
+      push({ role: "assistant", text: qa.answer, citations: qa.citations, chart: qa.chart ?? undefined });
+      if (qa.chart) {
+        refreshResults(qc, job.id);
+      }
       return;
     }
     if (!res.agent_used) {
@@ -180,6 +185,22 @@ export function ChatPanel({ job, instructions, onClose }: { job: Job; instructio
             ) : (
               <div className="msg-answer">
                 <div className="prose"><ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown></div>
+                {m.chart && (
+                  <figure className="chat-chart" style={{ marginTop: 10, marginBottom: 10, borderRadius: 8, overflow: "hidden", border: "1px solid var(--border, #cbd5e1)", background: "var(--card-bg, #ffffff)" }}>
+                    <button
+                      type="button"
+                      style={{ border: "none", background: "none", padding: 0, width: "100%", cursor: "pointer", display: "block" }}
+                      onClick={() => setChatZoom(m.chart!)}
+                      aria-label={`Enlarge ${m.chart.title}`}
+                    >
+                      <img src={m.chart.png_base64} alt={m.chart.title} style={{ width: "100%", display: "block" }} />
+                    </button>
+                    <figcaption style={{ padding: "8px 12px", background: "var(--bg-subtle, #f8fafc)", borderTop: "1px solid var(--border, #e2e8f0)", fontSize: 12 }}>
+                      <strong style={{ display: "block", color: "var(--text, #0f172a)", marginBottom: 2 }}>{m.chart.title}</strong>
+                      {m.chart.takeaway && <span style={{ color: "var(--muted, #64748b)" }}>{m.chart.takeaway}</span>}
+                    </figcaption>
+                  </figure>
+                )}
                 {m.options && (
                   <div className="options">
                     {m.options.map((o) => (
@@ -220,6 +241,16 @@ export function ChatPanel({ job, instructions, onClose }: { job: Job; instructio
           <button className="send" type="submit" disabled={!input.trim() || busy || disabled} aria-label="Send"><ArrowUp size={16} /></button>
         </div>
       </form>
+
+      {chatZoom && (
+        <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && setChatZoom(null)}>
+          <figure className="lightbox" role="dialog" aria-modal="true" aria-label={chatZoom.title}>
+            <button className="icon-btn lightbox-close" onClick={() => setChatZoom(null)} aria-label="Close"><X size={18} /></button>
+            <img src={chatZoom.png_base64} alt={chatZoom.title} />
+            <figcaption><strong>{chatZoom.title}</strong>{chatZoom.caption && <span>{chatZoom.caption}</span>}</figcaption>
+          </figure>
+        </div>
+      )}
     </aside>
   );
 }

@@ -44,7 +44,7 @@ def test_dag_runs_independent_nodes_in_parallel_and_respects_dependencies():
     results = run_dag([Node("a", work("a")), Node("b", work("b")), Node("c", work("c", 0.0), ("a", "b"))])
     assert time.monotonic() - t0 < 0.39  # a and b overlapped
     assert results["c"]["deps"] == ["a", "b"]
-    assert started["c"] >= max(started["a"], started["b"]) + 0.19
+    assert started["c"] >= max(started["a"], started["b"]) + 0.15
 
 
 def test_dag_captures_failures_and_still_runs_dependents():

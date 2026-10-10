@@ -103,19 +103,8 @@ class BaseAgent:
         schema: Type[T] | None = None,
         mask_pii: bool = False,
         tier: str = "default",
+        max_tokens: int | None = None,
     ):
-        """mask_pii defaults to False: most agents send internally-generated structured
-        JSON (metric ids/codes/values via prompt_utils.embed_json), and PII masking's
-        regexes -- BANK_ACCT in particular matches any bare 9-18 digit run -- would corrupt
-        that JSON by replacing numeric values with [[BANK_ACCT_n]] tokens, breaking the
-        json.loads round-trip on the other end. Pass mask_pii=True only where the message
-        actually contains raw excerpted document text (e.g. IntakeAgent's classification
-        prompt), which is the real PII exposure the design doc's §9 masking is for.
-
-        tier="reasoning" routes to the gateway's reasoning-tier model (see design doc §7
-        model tiering) for agents whose output quality matters most -- report writing,
-        insight synthesis, verification -- while classification/extraction agents keep the
-        default (faster/cheaper) model."""
         if mask_pii:
             from app.utils.pii import mask
 
@@ -124,7 +113,7 @@ class BaseAgent:
                 result = mask(m.get("content", ""))
                 masked_messages.append({**m, "content": result.masked_text})
             messages = masked_messages
-        return self.llm.complete(messages, schema=schema, tier=tier)
+        return self.llm.complete(messages, schema=schema, tier=tier, max_tokens=max_tokens)
 
 
 class WorkerAgent(BaseAgent):

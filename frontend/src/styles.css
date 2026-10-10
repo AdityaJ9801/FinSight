@@ -584,6 +584,98 @@ input:focus, textarea:focus { outline: none; border-color: var(--tick); box-shad
   margin-top: 6px;
 }
 
+/* ---------------------------------------------------------------- verification review card */
+.verification-card {
+  padding: 16px 18px;
+  background: var(--sheet);
+  border: 1px solid rgba(234, 88, 12, 0.3);
+  border-left: 4px solid #ea580c;
+  border-radius: var(--r-md);
+  margin-bottom: 16px;
+}
+.verification-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.verification-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.verification-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  background: rgba(234, 88, 12, 0.12);
+  color: #ea580c;
+}
+.verification-problems-box {
+  margin: 12px 0;
+  padding: 12px 14px;
+  background: rgba(239, 68, 68, 0.05);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 6px;
+}
+.verification-problems-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #dc2626;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.verification-issues-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+.verification-issues-list li {
+  margin-bottom: 4px;
+}
+.verification-manual-section {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: var(--vellum, #fbfbf8);
+  border: 1px dashed var(--rule);
+  border-radius: 6px;
+}
+.verification-manual-section summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.verification-manual-body {
+  margin-top: 10px;
+}
+.verification-manual-textarea {
+  width: 100%;
+  min-height: 65px;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+  background: var(--sheet);
+  color: var(--ink);
+  box-sizing: border-box;
+}
+
 
 /* ---------------------------------------------------------------- report / charts / data */
 

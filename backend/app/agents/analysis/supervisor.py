@@ -43,14 +43,16 @@ class AnalysisSupervisor:
         db.session.commit()
 
         module_agents = modules_for(job.plan_template)
-        results = {}
-        with ThreadPoolExecutor(max_workers=len(module_agents)) as pool:
-            futures = {
-                pool.submit(_run_module, self.app, self.llm, job.id, job.tenant_id, dataset_version_id, cls, guidance): cls.name
+        results: dict[str, Any] = {}
+        max_workers = self.app.config.get("LLM_MAX_CONCURRENT_REQUESTS", 5) if self.app.config.get("LLM_PARALLEL_CALLS", True) else 1
+        with ThreadPoolExecutor(max_workers=min(len(module_agents), max(1, max_workers))) as pool:
+            future_to_cls = {
+                pool.submit(_run_module, self.app, self.llm, job.id, job.tenant_id, dataset_version_id, cls, guidance): cls
                 for cls in module_agents
             }
-            for future in as_completed(futures):
-                results[futures[future]] = future.result()
+            for fut in as_completed(future_to_cls):
+                cls = future_to_cls[fut]
+                results[cls.name] = fut.result()
 
         done_count = sum(1 for r in results.values() if r.status == Status.DONE)
         job.status = "SYNTHESIZING" if done_count > 0 else "PARTIAL"

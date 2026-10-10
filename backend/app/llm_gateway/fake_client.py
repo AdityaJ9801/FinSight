@@ -21,7 +21,8 @@ T = TypeVar("T", bound=BaseModel)
 
 
 class FakeLLMGateway(LLMGateway):
-    def complete(self, messages, schema: Type[T] | None = None, tier: str = "default", max_retries: int = 1):
+    def complete(self, messages, schema: Type[T] | None = None, tier: str = "default", max_retries: int = 1,
+                 max_tokens: int | None = None):
         text = all_message_text(messages)
         # Keyword heuristics (_classify, _route) must only look at what the USER actually
         # said, not the system prompt's own prose describing the possible categories --
@@ -209,25 +210,102 @@ def _generic_findings(text: str) -> list[dict]:
 
 def _insights_from_metrics(text: str) -> list[dict]:
     metrics = extract_json("METRICS_JSON", text) or []
+    ds_profile = extract_json("DATASET_PROFILE_JSON", text) or {}
     insights = []
-    for m in metrics[:5]:
-        code = m.get("metric_code") or m.get("code") or "metric"
-        period = m.get("period_end", "")
-        mid = m.get("id", code)
-        insights.append({
-            "title": f"{code.replace('_', ' ').title()} trend",
-            "body": f"{{{{m:{code}:{period}}}}} is the latest reading for this metric.",
-            "metric_ids": [mid],
-            "recommendation": f"Monitor {code.replace('_', ' ')} over the next period.",
-        })
-    if not insights:
-        insights.append({
-            "title": "Insufficient data",
-            "body": "Not enough validated metrics were available to generate insights.",
+
+    # First: extract insights from dynamic dataset profile attributes (if present)
+    if ds_profile and ds_profile.get("datasets"):
+        for ds in ds_profile.get("datasets", []):
+            name = ds.get("name", "Dataset")
+            top_drivers = ds.get("top_drivers", {})
+            measure_totals = ds.get("measure_totals", {})
+
+            for dim, d_info in top_drivers.items():
+                top_names = d_info.get("top_names", [])
+                share_pct = d_info.get("share_pct", 0)
+                if top_names:
+                    insights.append({
+                        "title": f"Concentration in {dim} ({share_pct}%)",
+                        "body": f"In {name}, the top {dim.lower()}s ({', '.join(top_names)}) drive {share_pct}% of total activity.",
+                        "metric_ids": [],
+                        "recommendation": f"Monitor operational dependence and credit terms across dominant {dim.lower()}s.",
+                    })
+            for m, t_info in list(measure_totals.items())[:2]:
+                insights.append({
+                    "title": f"{m} Volume Profile",
+                    "body": f"Total {m} stands at {t_info.get('sum', 0):,} across {ds.get('row_count', 0)} entries (average {t_info.get('avg', 0):,}).",
+                    "metric_ids": [],
+                    "recommendation": f"Track {m.lower()} velocity and margin consistency over operational cycles.",
+                })
+
+    if not metrics:
+        return insights or [{
+            "title": "Financial Data Overview",
+            "body": "Analysis completed across the validated financial statements.",
             "metric_ids": [],
-            "recommendation": None,
+            "recommendation": "Review uploaded statements for further operational details.",
+        }]
+
+    # Group metrics by code with valid numeric values
+    by_code: dict[str, list[dict]] = {}
+    for m in metrics:
+        code = m.get("metric_code") or m.get("code")
+        if code and m.get("value") is not None:
+            by_code.setdefault(code, []).append(m)
+
+    priority_codes = [
+        "revenue", "gross_profit", "gross_profit_pct", "ebitda", "ebitda_margin",
+        "operating_margin", "net_income", "current_ratio", "quick_ratio",
+        "debt_to_equity", "interest_coverage", "fcf", "cfo", "health_score"
+    ]
+    ordered_codes = [c for c in priority_codes if c in by_code]
+    for c in by_code:
+        if c not in ordered_codes:
+            ordered_codes.append(c)
+
+    for code in ordered_codes[:7]:
+        pts = sorted(by_code[code], key=lambda x: str(x.get("period_end") or x.get("period") or ""))
+        cur = pts[-1]
+        cur_period = cur.get("period_end") or cur.get("period") or ""
+        cur_id = cur.get("id", code)
+        code_name = code.replace("_", " ").title()
+
+        if len(pts) >= 2:
+            prev = pts[-2]
+            prev_period = prev.get("period_end") or prev.get("period") or ""
+            prev_id = prev.get("id", code)
+            val_cur = float(cur["value"])
+            val_prev = float(prev["value"])
+            diff = val_cur - val_prev
+
+            if diff > 0:
+                verb = "expanded" if "margin" in code or "pct" in code else "grew"
+                body = f"{code_name} {verb} to {{{{m:{code}:{cur_period}}}}} from {{{{m:{code}:{prev_period}}}}}."
+            elif diff < 0:
+                verb = "contracted" if "margin" in code or "pct" in code else "declined"
+                body = f"{code_name} {verb} to {{{{m:{code}:{cur_period}}}}} from {{{{m:{code}:{prev_period}}}}}."
+            else:
+                body = f"{code_name} held steady at {{{{m:{code}:{cur_period}}}}} compared to {{{{m:{code}:{prev_period}}}}}."
+            rec = f"Continue tracking {code.replace('_', ' ')} trajectory against benchmarks."
+            metric_ids = [cur_id, prev_id]
+        else:
+            body = f"{code_name} stands at {{{{m:{code}:{cur_period}}}}} for the current reporting period."
+            rec = f"Establish multi-period baseline for {code.replace('_', ' ')}."
+            metric_ids = [cur_id]
+
+        insights.append({
+            "title": f"{code_name} Performance",
+            "body": body,
+            "metric_ids": metric_ids,
+            "recommendation": rec,
         })
-    return insights
+
+    return insights or [{
+        "title": "Financial Metrics Overview",
+        "body": "Operational indicators compiled successfully.",
+        "metric_ids": [],
+        "recommendation": None,
+    }]
 
 
 def _chart_captions(text: str) -> list[dict]:
@@ -243,14 +321,36 @@ def _report_draft(text: str) -> dict:
     skeleton = extract_json("SKELETON_JSON", text) or []
     insights = extract_json("INSIGHTS_JSON", text) or []
     charts = extract_json("CHARTS_JSON", text) or []
+    ds_profile = extract_json("DATASET_PROFILE_JSON", text) or {}
     chart_ids = [c.get("chart_id") for c in charts if c.get("chart_id")]
 
     if skeleton:
         sections = []
         for i, sk in enumerate(skeleton):
+            s_key = sk.get("section_key")
             ins_body = insights[i].get("body", "") if i < len(insights) else ""
             guide = sk.get("diagnostic_guide") or []
-            if guide and not ins_body:
+
+            if s_key == "dataset_attributes" and ds_profile.get("datasets"):
+                lines = []
+                for ds in ds_profile["datasets"]:
+                    d_str = ", ".join(ds.get("dimensions", [])) or "None"
+                    m_str = ", ".join(ds.get("measures", [])) or "None"
+                    lines.append(
+                        f"Dataset '{ds.get('name')}' comprises {ds.get('row_count')} records with dimensions ({d_str}) "
+                        f"and quantitative measures ({m_str})."
+                    )
+                body_text = " ".join(lines) + " The multiagent pipeline analyzed these dimensional attributes first to build tailored visualizations and driver rankings."
+            elif s_key == "operational_drivers" and ds_profile.get("datasets"):
+                lines = []
+                for ds in ds_profile["datasets"]:
+                    for dim, d_info in ds.get("top_drivers", {}).items():
+                        lines.append(
+                            f"Within dimension '{dim}', top contributors ({', '.join(d_info.get('top_names', []))}) "
+                            f"command {d_info.get('share_pct')}% of aggregate volume."
+                        )
+                body_text = " ".join(lines) or "Detailed distribution and Pareto concentrations across primary operational dimensions."
+            elif guide and not ins_body:
                 metric_name = guide[0].get("canonical_name", "key metrics")
                 cfo_q = guide[0].get("sample_questions", ["Review operational drivers."])[0]
                 body_text = (

@@ -101,3 +101,103 @@ select:disabled { opacity: 0.6; cursor: default; }
 }
 .ledger-note { font-size: 13px; color: var(--graphite); margin-bottom: -12px; }
 .compare-caveat { display: block; font-size: 11px; color: var(--manila); margin-top: 2px; }
+
+/* ---------------------------------------------------------------- worker concurrency controls */
+
+.worker-settings-card {
+  padding: 18px 20px;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  display: grid;
+  gap: 16px;
+}
+
+.worker-slider-wrap {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--paper);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-sm);
+}
+
+.worker-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.worker-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(14, 116, 144, 0.1);
+  color: #0e7490;
+  border: 1px solid rgba(14, 116, 144, 0.25);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.worker-slider-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.worker-range-input {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  accent-color: #0e7490;
+  cursor: pointer;
+}
+
+.worker-num-input {
+  width: 64px;
+  min-height: 32px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-sm);
+  background: var(--sheet);
+}
+
+.worker-preset-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.worker-pill {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  background: var(--sheet);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: all 120ms var(--ease);
+}
+
+.worker-pill:hover {
+  border-color: var(--ink-2);
+  color: var(--ink);
+  background: var(--paper-sunk);
+}
+
+.worker-pill.active {
+  border-color: #0e7490;
+  background: rgba(14, 116, 144, 0.12);
+  color: #0e7490;
+  font-weight: 600;
+}
+

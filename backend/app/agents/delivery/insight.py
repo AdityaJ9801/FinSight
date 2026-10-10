@@ -60,10 +60,13 @@ class InsightReasonerAgent(WorkerAgent):
             "metric_ids": f.metric_ids,
         } for f in findings]
 
+        dataset_profile = blackboard.read(spec.job_id, "dataset_profile") or {}
         user_content = (
             embed_json("METRICS_JSON", metrics_ctx) + "\n" + embed_json("FINDINGS_JSON", findings_ctx) + "\n"
             + embed_json("HEALTH_SCORE_JSON", health) + "\n" + embed_json("BENCHMARK_CONTEXT_JSON", benchmark_context)
         )
+        if dataset_profile:
+            user_content += "\n" + embed_json("DATASET_PROFILE_JSON", dataset_profile)
         user_guidance = spec.params.get("user_guidance")
         if user_guidance:
             user_content += "\n" + embed_json("USER_GUIDANCE_JSON", user_guidance)
@@ -71,15 +74,24 @@ class InsightReasonerAgent(WorkerAgent):
             {"role": "system", "content": prompts.INSIGHT_REASONER},
             {"role": "user", "content": user_content},
         ]
-        insight_set: InsightSet = self.call_llm(prompt, schema=InsightSet, tier="reasoning")
+        try:
+            insight_set: InsightSet = self.call_llm(prompt, schema=InsightSet, tier="reasoning")
+        except Exception as exc:
+            current_app.logger.warning("Insight reasoning LLM failed (%s), using deterministic insights fallback", exc)
+            insight_set = None
 
         # findings/metrics/benchmark are already loaded above for the insight-reasoning
         # prompt -- persisted alongside the ranked insights too, so the report writer can
         # draw on the full detail (not just the top-line insights) without another LLM call
         # or another DB round-trip.
+        if not getattr(insight_set, "insights", None):
+            from app.llm_gateway.fake_client import _insights_from_metrics
+            insight_set = InsightSet(insights=_insights_from_metrics(user_content))
+
         payload = {
             "insights": [i.model_dump() for i in insight_set.insights], "health_score": health,
             "findings": findings_ctx, "metrics": metrics_ctx, "benchmark_context": benchmark_context,
+            "dataset_profile": dataset_profile,
         }
         uri = blackboard.write(spec.job_id, "insights", payload)
 

@@ -57,11 +57,21 @@ def pl_expenses(f: dict) -> tuple[float | None, str]:
     """Total expenses: the stated total when reported, else the sum of expense lines net of
     expenditure transferred to capital. In multi-step income statements, stated 'Total Expenses'
     often represents Operating Expenses (SG&A) and excludes Cost of Goods Sold; this detects
-    whether COGS must be added to reach true total expenses."""
+    whether COGS must be added to reach true total expenses.
+
+    When PL.GROSS_PROFIT is present, the statement is explicitly multi-step:
+    Revenue - COGS = Gross Profit, then Gross Profit - OpEx = Operating Income.
+    In that case PL.TOTAL_EXPENSES represents only OpEx (COGS excluded by definition).
+    """
     if "PL.TOTAL_EXPENSES" in f:
         total = f["PL.TOTAL_EXPENSES"]
         cogs = f.get("PL.COGS", 0.0)
         if cogs > 0:
+            # If Gross Profit is explicitly stated, this is a multi-step P&L:
+            # COGS is already deducted in the Gross Profit line, so Total Expenses
+            # is OpEx only. Always add COGS back to get total cost basis.
+            if "PL.GROSS_PROFIT" in f:
+                return total + cogs, "stated operating expenses + COGS (multi-step)"
             cogs_excluded = False
             if total < cogs:
                 # Total expenses cannot be smaller than one of its positive line items
@@ -84,12 +94,24 @@ def pl_expenses(f: dict) -> tuple[float | None, str]:
     return sum(f.get(k, 0.0) for k in EXPENSE_LINES) - f.get("PL.EXPENSES_CAPITALISED", 0.0), "sum of lines"
 
 
+
 def pl_income(f: dict) -> float | None:
     if "PL.TOTAL_INCOME" in f:
         return f["PL.TOTAL_INCOME"]
     if "PL.REVENUE" not in f:
         return None
     return f["PL.REVENUE"] + f.get("PL.OTHER_INCOME", 0.0)
+
+
+def pl_gross_profit(f: dict) -> float | None:
+    """Gross profit: stated when present, else Revenue - COGS."""
+    if "PL.GROSS_PROFIT" in f:
+        return f["PL.GROSS_PROFIT"]
+    inc = pl_income(f)
+    if inc is None:
+        return None
+    cogs = f.get("PL.COGS", 0.0)
+    return inc - cogs
 
 
 def pl_pbeit(f: dict) -> tuple[float | None, str]:

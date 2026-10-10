@@ -1,5 +1,5 @@
 import type {
-  AddDocumentsResult, AssistantResponse, Benchmarks, Chart, DetailedAnalysis, Finding, HealthScore, IndustryList, Instruction, Job,
+  AddDocumentsResult, AssistantResponse, Benchmarks, Chart, DataExplorerResult, DetailedAnalysis, Finding, HealthScore, IndustryList, Instruction, Job,
   LlmStatus, Metric, QaResponse, ReviewItem, TaskRun, ValidationCheck,
 } from "./types";
 
@@ -108,6 +108,7 @@ export const api = {
   agents: () => request<{ name: string; stage: string; label: string; description: string }[]>("/agents"),
 
   detailedAnalysis: (id: string) => request<DetailedAnalysis>(`/jobs/${id}/analysis`),
+  dataExplorer: (id: string) => request<DataExplorerResult>(`/jobs/${id}/data-explorer`),
   llmStatus: () => request<LlmStatus>("/llm/status"),
   saveLlm: (payload: Record<string, unknown>) => request<LlmStatus>("/llm/config", json(payload)),
 };

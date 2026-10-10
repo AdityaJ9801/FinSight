@@ -44,7 +44,7 @@ services:
     <<: *backend
     # No --pool=solo here (that's only needed on native Windows) -- Linux containers support
     # Celery's default prefork pool, so jobs get real multi-process concurrency.
-    command: celery -A app.workers.celery_app worker -l info --concurrency=2
+    command: celery -A app.workers.celery_app worker -l info --concurrency=${CELERY_CONCURRENCY:-4}
     depends_on:
       redis:
         condition: service_healthy

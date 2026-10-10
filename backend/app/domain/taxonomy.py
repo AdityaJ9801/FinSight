@@ -246,8 +246,11 @@ def build_report_skeleton(
     findings: list[dict],
     health_score: dict | None = None,
     charts: list[dict] | None = None,
+    dataset_profile: dict | None = None,
 ) -> list[dict[str, Any]]:
-    """Generates the ordered, deterministic list of sections supported by available data."""
+    """Generates the ordered, deterministic list of sections supported by available data.
+    When structured datasets (dimensional or tabular) exist, high-level dataset profiling
+    and operational driver sections are placed FIRST, before checking predefined statement ratios."""
     charts = charts or []
     metric_codes = {m.get("metric_code") or m.get("code") for m in metrics if m.get("metric_code") or m.get("code")}
     finding_modules = {normalize_finding_module(f.get("module")) for f in findings if f.get("module")}
@@ -271,7 +274,35 @@ def build_report_skeleton(
         "chart_ids": chart_map.get("executive_summary", []),
     })
 
-    # Evaluate each domain category in predefined sequence
+    # 2. Dynamic Dataset-First Sections (when dimensional, transactional, or custom datasets exist)
+    if dataset_profile and dataset_profile.get("datasets"):
+        ds_charts = chart_map.get("dataset_attributes", []) + chart_map.get("chat_custom", [])
+        skeleton.append({
+            "section_key": "dataset_attributes",
+            "heading": "Dataset Architecture & Attribute Profile",
+            "description": "High-level profiling of dataset dimensions, measures, record volume, and core transactional entities.",
+            "required_topics": [
+                "Dataset dimensions, granularity, and primary measure totals",
+                "Distribution of key operational metrics across categories",
+                "Completeness, scale, and multi-attribute structure",
+            ],
+            "chart_ids": ds_charts[:2] if ds_charts else [],
+        })
+
+        if any(f.get("module") in ("dataset_profile", "dataset_analytics", "detailed_analytics", "dataset_analysis") for f in findings) or len(ds_charts) > 1:
+            skeleton.append({
+                "section_key": "operational_drivers",
+                "heading": "Operational Drivers & Category Breakdown",
+                "description": "Granular analysis across primary dimensions, top contributors, and concentration distributions.",
+                "required_topics": [
+                    "Top contributing entities, products, ledgers, or customer segments",
+                    "Pareto 80/20 concentration analysis and exposure risks",
+                    "Variance and spreads across active operational categories",
+                ],
+                "chart_ids": ds_charts[1:4] if len(ds_charts) > 1 else ds_charts,
+            })
+
+    # 3. Predefined Domain Financial Categories (when canonical statements/accounts exist)
     for cat in REPORT_CATEGORIES[1:]:
         has_metrics = bool(set(cat.metric_codes) & metric_codes)
         has_findings = bool(set(cat.finding_modules) & finding_modules)

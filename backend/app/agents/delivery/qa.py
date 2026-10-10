@@ -56,29 +56,35 @@ class QAAgent(WorkerAgent):
         dataset_version = db.session.get(DatasetVersion, dataset_version_id)
         job_id = dataset_version.job_id if dataset_version else None
 
-        route_prompt = [{"role": "system", "content": prompts.QA_ROUTER}]
-        if history:
-            for turn in history[-4:]:
-                role = turn.get("role") or "user"
-                content = turn.get("content") or ""
-                if content:
-                    route_prompt.append({"role": role, "content": content})
-        route_prompt.append({"role": "user", "content": question})
+        # 1. Instant Chart Delivery Short-Circuit (<30ms)
+        from app.domain.chat_intent import is_chart_request, is_action_request
+        from app.domain.dynamic_chart_builder import generate_chart_for_prompt
 
-        route: RouteDecision = self.call_llm(route_prompt, schema=RouteDecision)
+        if job_id and is_chart_request(question):
+            try:
+                gen_chart = generate_chart_for_prompt(job_id, question)
+                if gen_chart:
+                    title = gen_chart.get("title", "Financial Chart")
+                    takeaway = gen_chart.get("takeaway", "")
+                    caption = gen_chart.get("caption", "")
+                    answer_body = f"**{title}**\n\n{takeaway}\n\n*Key Details:* {caption}" if takeaway else f"Generated dynamic chart: **{title}**.\n\n{caption}"
+                    return {
+                        "answer": answer_body,
+                        "citations": [gen_chart.get("chart_id", "dynamic_chart")],
+                        "route": "chart_lookup",
+                        "chart": {
+                            "chart_id": gen_chart.get("chart_id"),
+                            "title": gen_chart.get("title"),
+                            "caption": gen_chart.get("caption", ""),
+                            "takeaway": gen_chart.get("takeaway", ""),
+                            "png_base64": gen_chart.get("png_base64"),
+                            "section_key": gen_chart.get("section_key"),
+                        },
+                    }
+            except Exception:
+                pass
 
-        if route.route == "out_of_scope":
-            return {
-                "answer": (
-                    "That's outside what I can answer from this dataset. I can help with specific metric "
-                    "calculations, uploaded statement disclosures, report findings, visual charts, "
-                    "or guide you on re-running analysis modules."
-                ),
-                "citations": [],
-                "route": route.route,
-            }
-
-        if route.route == "action_request":
+        if is_action_request(question):
             return {
                 "answer": (
                     "To recompute analysis with new assumptions (e.g. excluding one-off items or adjusting "
@@ -86,7 +92,58 @@ class QAAgent(WorkerAgent):
                     "agent (e.g. 'redo the risk score excluding one-off item' or 'rerun report_writer')."
                 ),
                 "citations": [],
-                "route": route.route,
+                "route": "action_request",
+            }
+
+        # 2. Fast Intent Pre-Routing: avoid LLM router if query has clear deterministic target
+        matched_tree = resolve_metric_tree(question)
+        fact_codes_initial = match_metrics(question)
+        route_str: str | None = None
+
+        if is_chart_request(question):
+            route_str = "chart_lookup"
+        elif fact_codes_initial or matched_tree:
+            route_str = "sql"
+        elif _CONCERN_WORDS.search(question):
+            route_str = "report_lookup"
+        elif any(k in q_clean for k in ("overview", "summary", "recommendation", "insight", "health score", "executive")):
+            route_str = "report_lookup"
+        elif any(k in q_clean for k in ("what does", "says in", "disclose", "note to accounts", "according to")):
+            route_str = "document_rag"
+
+        if not route_str:
+            route_prompt = [{"role": "system", "content": prompts.QA_ROUTER}]
+            if history:
+                for turn in history[-4:]:
+                    role = turn.get("role") or "user"
+                    content = turn.get("content") or ""
+                    if content:
+                        route_prompt.append({"role": role, "content": content})
+            route_prompt.append({"role": "user", "content": question})
+
+            route: RouteDecision = self.call_llm(route_prompt, schema=RouteDecision, tier="fast", max_tokens=200)
+            route_str = route.route
+
+        if route_str == "out_of_scope":
+            return {
+                "answer": (
+                    "That's outside what I can answer from this dataset. I can help with specific metric "
+                    "calculations, uploaded statement disclosures, report findings, visual charts, "
+                    "or guide you on re-running analysis modules."
+                ),
+                "citations": [],
+                "route": route_str,
+            }
+
+        if route_str == "action_request":
+            return {
+                "answer": (
+                    "To recompute analysis with new assumptions (e.g. excluding one-off items or adjusting "
+                    "projections) or regenerate the report, use the Chat Assistant to re-run the relevant "
+                    "agent (e.g. 'redo the risk score excluding one-off item' or 'rerun report_writer')."
+                ),
+                "citations": [],
+                "route": route_str,
             }
 
         rows: list[dict] = []
@@ -96,17 +153,18 @@ class QAAgent(WorkerAgent):
 
         # Load available charts if present for this job
         all_charts: list[dict] = (blackboard.read(job_id, "charts") or []) if job_id else []
+        generated_chart = None
 
-        matched_tree = resolve_metric_tree(question)
-
-        if route.route == "chart_lookup":
+        if route.route == "chart_lookup" or generated_chart:
             # Match specific chart if named in question, otherwise provide summary of all charts
             q_low = question.lower()
             matching_charts = [
                 c for c in all_charts
                 if any(w in c.get("title", "").lower() for w in q_low.split() if len(w) > 3)
             ]
-            selected = matching_charts or all_charts
+            selected = ([generated_chart] if generated_chart else []) + (matching_charts or all_charts)
+            if not generated_chart and selected and selected[0].get("png_base64"):
+                generated_chart = selected[0]
             charts_data = [
                 {
                     "chart_id": c.get("chart_id"),
@@ -116,12 +174,12 @@ class QAAgent(WorkerAgent):
                     "labels": (c.get("spec") or {}).get("labels"),
                     "series": (c.get("spec") or {}).get("series"),
                 }
-                for c in selected[:6]
+                for c in selected[:6] if c
             ]
             if not charts_data:
                 rows = self.call_tool("sql.query_readonly", view="v_metrics", filters={"dataset_version": dataset_version_id}, limit=10)
 
-        elif route.route == "sql":
+        elif route_str == "sql":
             matched_code = next(
                 (code for code in REGISTRY if code.replace("_", " ") in question.lower() or code in question.lower()),
                 None,
@@ -133,13 +191,13 @@ class QAAgent(WorkerAgent):
                 filters["metric_code"] = matched_code
             rows = self.call_tool("sql.query_readonly", view="v_metrics", filters=filters, limit=20)
 
-        elif route.route == "document_rag":
+        elif route_str == "document_rag":
             document_ids = [d.id for d in Document.query.filter_by(job_id=job_id).all()] if job_id else []
             chunks = self.call_tool(
                 "vector.search", tenant_id=tenant_id, query=question, top_k=5, document_ids=document_ids
             )
 
-        elif route.route == "report_lookup":
+        elif route_str == "report_lookup":
             findings = Finding.query.filter_by(dataset_version=dataset_version_id).limit(15).all()
             report_data = [{"module": f.module, "title": f.title, "body": f.body, "severity": f.severity} for f in findings]
             if job_id:
@@ -191,10 +249,19 @@ class QAAgent(WorkerAgent):
             {"role": "system", "content": prompts.QA_COMPOSER},
             {"role": "user", "content": prompt_content},
         ]
-        result: QAAnswerResult = self.call_llm(compose_prompt, schema=QAAnswerResult, tier="reasoning")
-        # Findings and insights carry {{m:code:period}} bindings; never show them raw.
+        result: QAAnswerResult = self.call_llm(compose_prompt, schema=QAAnswerResult, tier="fast", max_tokens=1000)
         answer, _ = resolve_placeholders(result.answer, dataset_version_id)
-        return {"answer": answer, "citations": result.citations, "route": route.route}
+        ret = {"answer": answer, "citations": result.citations, "route": route_str}
+        if generated_chart:
+            ret["chart"] = {
+                "chart_id": generated_chart.get("chart_id"),
+                "title": generated_chart.get("title"),
+                "caption": generated_chart.get("caption", ""),
+                "takeaway": generated_chart.get("takeaway", ""),
+                "png_base64": generated_chart.get("png_base64"),
+                "section_key": generated_chart.get("section_key"),
+            }
+        return ret
 
     def execute(self, spec: TaskSpec) -> AgentResult:
         result = self.answer(spec.tenant_id, spec.params["dataset_version_id"], spec.params["question"])

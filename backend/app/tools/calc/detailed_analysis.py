@@ -80,7 +80,7 @@ def statement_analysis(facts_by_period: dict[date, dict[str, float]]) -> dict[st
     for account_id in accounts:
         statement = account_id.split(".", 1)[0]
         if statement not in out:
-            continue
+            out[statement] = []
         values = {p.isoformat(): facts_by_period[p].get(account_id) for p in periods}
         row: dict[str, Any] = {
             "account_id": account_id, "account_name": ACCOUNT_NAMES.get(account_id, account_id),

@@ -100,7 +100,7 @@ export interface ReviewRecommendation {
 
 export interface ReviewItem {
   id: string;
-  kind: "reconciliation" | "mapping" | string;
+  kind: "reconciliation" | "mapping" | "verification" | string;
   status: string;
   created_at: string;
   payload: {
@@ -114,6 +114,9 @@ export interface ReviewItem {
     suggested_account_id?: string;
     confidence?: number;
     document_id?: string;
+    summary?: string;
+    issues?: string[];
+    feedback?: string[];
 
     recommendation?: ReviewRecommendation;
     [k: string]: unknown;
@@ -152,6 +155,7 @@ export interface QaResponse {
   answer: string;
   citations: string[];
   route: string;
+  chart?: Chart | null;
 }
 
 export interface Industry { key: string; label: string }
@@ -187,7 +191,7 @@ export interface BridgeStep { label: string; amount: number; kind: "start" | "de
 /** GET /api/jobs/<id>/analysis -- the detailed statement analysis (tools/calc/detailed_analysis.py). */
 export interface DetailedAnalysis {
   periods: string[];
-  statements: { PL: StatementRow[]; BS: StatementRow[]; CF: StatementRow[] };
+  statements: { PL: StatementRow[]; BS: StatementRow[]; CF: StatementRow[]; [k: string]: StatementRow[] };
   dupont: { period: string; net_margin: number; asset_turnover: number; equity_multiplier: number; roe: number }[];
   growth: { label: string; metric_code: string; first_period: string; last_period: string; first: number; last: number; years: number; cagr: number | null }[];
   profit_bridge: { from_period: string; to_period: string; steps: BridgeStep[]; unexplained: number; reconciled: boolean } | null;
@@ -197,6 +201,49 @@ export interface DetailedAnalysis {
     top_inflows: { counterparty: string; amount: number; share: number | null }[];
     top_outflows: { counterparty: string; amount: number; share: number | null }[];
     totals: { inflow: number; outflow: number; net: number; months: number; txn_count: number; avg_monthly_net: number | null } | null;
+  };
+}
+
+export interface DataExplorerAttributeRow {
+  attribute_name: string;
+  account_id: string;
+  account_name: string;
+  sheet: string;
+  unit: string;
+  source_doc: string;
+  values: Record<string, number | null>;
+  change_pct: Record<string, number | null>;
+  order_index?: number;
+}
+
+export interface DataExplorerColumn {
+  key: string;
+  label: string;
+  account_id?: string;
+  type: string;
+  unit?: string;
+}
+
+export interface DataExplorerResult {
+  summary: {
+    total_attributes: number;
+    total_periods: number;
+    total_facts: number;
+    sheets: string[];
+  };
+  sheets: string[];
+  periods: string[];
+  row_format: {
+    sheets: Record<string, DataExplorerAttributeRow[]>;
+    all: DataExplorerAttributeRow[];
+  };
+  column_format: {
+    sheets: Record<string, {
+      columns: DataExplorerColumn[];
+      rows: Record<string, any>[];
+      total_attributes: number;
+      total_periods: number;
+    }>;
   };
 }
 

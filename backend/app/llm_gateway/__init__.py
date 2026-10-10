@@ -82,12 +82,18 @@ def get_llm_gateway() -> LLMGateway:
     current_key = current_app.config.get(config_keys[1], "") if config_keys else ""
     current_model = current_app.config.get(config_keys[2], "") if config_keys else ""
 
-    # Re-create if backend changed or credentials/model changed dynamically
+    # Re-create if backend changed or credentials/model/concurrency changed dynamically
+    configured_parallel = current_app.config.get("LLM_PARALLEL_CALLS", True)
+    configured_max_requests = current_app.config.get("LLM_MAX_CONCURRENT_REQUESTS", 5)
+    expected_concurrency = max(1, configured_max_requests) if configured_parallel else 1
+
     if (
         _instance is None
         or getattr(_instance, "_backend_name", None) != backend
         or getattr(_instance, "api_key", None) != current_key
         or getattr(_instance, "model_name", None) != current_model
+        or getattr(_instance, "parallel_calls", None) != configured_parallel
+        or getattr(_instance, "_effective_concurrency", None) != expected_concurrency
     ):
         if config_keys:
             base_url_key, api_key_key, model_key, reasoning_key = config_keys

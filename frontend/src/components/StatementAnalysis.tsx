@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
+import { Columns2, Rows2, Search } from "lucide-react";
 import { formatInrCompact, formatPeriodShort } from "../lib/format";
-import type { BridgeStep, DetailedAnalysis, StatementRow } from "../lib/types";
+import type { BridgeStep, DetailedAnalysis, StatementRow, Job } from "../lib/types";
+import { DataExplorer } from "./DataExplorer";
 
 const pct = (v: number | null | undefined, digits = 1) =>
   v === null || v === undefined || Number.isNaN(v) ? "–" : `${v < 0 ? "−" : ""}${Math.abs(v * 100).toFixed(digits)}%`;
@@ -10,8 +12,9 @@ const signed = (v: number) => (v > 0 ? "+" : "") + formatInrCompact(v).replace(/
 const fy = (iso: string) => formatPeriodShort(iso);
 
 /** Everything the detailed-analytics agent computed, laid out as working papers. */
-export function StatementAnalysis({ analysis }: { analysis: DetailedAnalysis }) {
-  const hasStatements = analysis.statements.PL.length + analysis.statements.BS.length + analysis.statements.CF.length > 0;
+export function StatementAnalysis({ analysis, job }: { analysis: DetailedAnalysis; job?: Job }) {
+  const statementKeys = Object.keys(analysis.statements || {});
+  const hasStatements = statementKeys.some((k) => analysis.statements[k]?.length > 0);
   return (
     <div className="sa">
       {analysis.profit_bridge && <ProfitBridge bridge={analysis.profit_bridge} />}
@@ -22,6 +25,7 @@ export function StatementAnalysis({ analysis }: { analysis: DetailedAnalysis }) 
         </div>
       )}
       {hasStatements && <Statements analysis={analysis} />}
+      {job && <DataExplorer job={job} />}
       {analysis.leverage_liquidity.length > 0 && <LeverageLiquidity rows={analysis.leverage_liquidity} />}
       {analysis.bank.totals && <BankFlows bank={analysis.bank} />}
     </div>
@@ -110,18 +114,25 @@ function Growth({ rows }: { rows: DetailedAnalysis["growth"] }) {
   );
 }
 
-type StmtKey = "PL" | "BS" | "CF";
 type Mode = "amounts" | "common" | "change";
-const STMT_LABEL: Record<StmtKey, string> = { PL: "Profit & loss", BS: "Balance sheet", CF: "Cash flow" };
-const COMMON_LABEL: Record<StmtKey, string> = { PL: "% of revenue", BS: "% of total assets", CF: "" };
+const STMT_LABEL: Record<string, string> = { PL: "Profit & loss", BS: "Balance sheet", CF: "Cash flow" };
+const COMMON_LABEL: Record<string, string> = { PL: "% of revenue", BS: "% of total assets", CF: "" };
 
 function Statements({ analysis }: { analysis: DetailedAnalysis }) {
-  const available = (["PL", "BS", "CF"] as StmtKey[]).filter((k) => analysis.statements[k].length);
-  const [stmt, setStmt] = useState<StmtKey>(available[0]);
+  const available = Object.keys(analysis.statements).filter((k) => analysis.statements[k]?.length);
+  const [stmt, setStmt] = useState<string>(available[0] || "PL");
+  const [layout, setLayout] = useState<"row" | "column">("row");
   const [mode, setMode] = useState<Mode>("amounts");
-  const rows = analysis.statements[stmt];
-  const periods = analysis.periods.filter((p) => rows.some((r) => r.values[p] !== null && r.values[p] !== undefined)).slice(-4);
+  const [search, setSearch] = useState("");
+  const rows = analysis.statements[stmt] || [];
+  const periods = analysis.periods.filter((p) => rows.some((r) => r.values[p] !== null && r.values[p] !== undefined)).slice(-8);
   const effectiveMode: Mode = mode === "common" && stmt === "CF" ? "amounts" : mode;
+
+  const filteredRows = useMemo(() => {
+    if (!search.trim()) return rows;
+    const q = search.toLowerCase();
+    return rows.filter((r) => r.account_name.toLowerCase().includes(q) || r.account_id.toLowerCase().includes(q));
+  }, [rows, search]);
 
   const cell = (r: StatementRow, p: string, i: number) => {
     if (effectiveMode === "common") return pct(r.common_size[p]);
@@ -131,49 +142,145 @@ function Statements({ analysis }: { analysis: DetailedAnalysis }) {
 
   return (
     <section aria-labelledby="stmt-title">
-      <div className="section-head">
-        <h2 className="panel-title" id="stmt-title">Statements</h2>
-        <div className="stmt-controls">
+      <div className="section-head" style={{ marginBottom: 14 }}>
+        <h2 className="panel-title" id="stmt-title">Statements &amp; Attributes</h2>
+        <div className="stmt-controls" style={{ alignItems: "center" }}>
+          {/* Statement selector */}
           <div className="seg" role="tablist" aria-label="Statement">
             {available.map((k) => (
-              <button key={k} role="tab" aria-selected={stmt === k} className={stmt === k ? "seg-on" : ""} onClick={() => setStmt(k)}>{STMT_LABEL[k]}</button>
+              <button key={k} role="tab" aria-selected={stmt === k} className={stmt === k ? "seg-on" : ""} onClick={() => setStmt(k)}>
+                {STMT_LABEL[k] || k}
+              </button>
             ))}
           </div>
+
+          {/* Layout Switcher: Row format vs Column format */}
+          <div className="seg" role="tablist" aria-label="Layout">
+            <button
+              type="button"
+              className={layout === "row" ? "seg-on" : ""}
+              onClick={() => setLayout("row")}
+              style={{ display: "flex", alignItems: "center", gap: 5 }}
+            >
+              <Rows2 size={13} />
+              <span>Row format</span>
+            </button>
+            <button
+              type="button"
+              className={layout === "column" ? "seg-on" : ""}
+              onClick={() => setLayout("column")}
+              style={{ display: "flex", alignItems: "center", gap: 5 }}
+            >
+              <Columns2 size={13} />
+              <span>Column format</span>
+            </button>
+          </div>
+
+          {/* Display Mode: Amounts, Common Size, Change */}
           <div className="seg" role="tablist" aria-label="Show">
             {(["amounts", "common", "change"] as Mode[]).filter((m) => !(m === "common" && stmt === "CF")).map((m) => (
               <button key={m} role="tab" aria-selected={effectiveMode === m} className={effectiveMode === m ? "seg-on" : ""} onClick={() => setMode(m)}>
-                {m === "amounts" ? "Amounts" : m === "common" ? COMMON_LABEL[stmt] : "Change"}
+                {m === "amounts" ? "Amounts" : m === "common" ? (COMMON_LABEL[stmt] || "% of base") : "Change"}
               </button>
             ))}
           </div>
         </div>
       </div>
-      <div className="spread-wrap">
-        <table className="spread">
-          <thead>
-            <tr>
-              <th scope="col">Line item</th>
-              {periods.map((p) => <th key={p} scope="col" className="num">{fy(p)}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => {
-              const isTotal = /total|profit after tax|^pat$/i.test(r.account_name) || /TOTAL|\.PAT$/.test(r.account_id);
-              return (
-                <tr key={r.account_id} className={isTotal ? "stmt-total" : ""}>
-                  <th scope="row">{r.account_name}</th>
-                  {periods.map((p, i) => {
+
+      {/* Search bar */}
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+        <div style={{ position: "relative", minWidth: 220, maxWidth: 320, width: "100%" }}>
+          <Search size={13} style={{ position: "absolute", left: 10, top: 9, color: "var(--graphite)" }} />
+          <input
+            type="text"
+            className="input"
+            style={{ width: "100%", paddingLeft: 28, fontSize: 13, height: 32 }}
+            placeholder="Search statement line items..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+      </div>
+
+      {/* 1. ROW FORMAT VIEW */}
+      {layout === "row" && (
+        <div className="spread-wrap table-card">
+          <table className="spread">
+            <thead>
+              <tr>
+                <th scope="col" style={{ minWidth: 260 }}>Line item / Attribute</th>
+                {periods.map((p) => <th key={p} scope="col" className="num">{fy(p)}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows.map((r) => {
+                const isTotal = /total|profit after tax|^pat$/i.test(r.account_name) || /TOTAL|\.PAT$/.test(r.account_id);
+                return (
+                  <tr key={r.account_id} className={isTotal ? "stmt-total" : ""}>
+                    <th scope="row">{r.account_name}</th>
+                    {periods.map((p, i) => {
+                      const v = effectiveMode === "change" ? r.change_pct[p] : effectiveMode === "common" ? r.common_size[p] : r.values[p];
+                      const neg = typeof v === "number" && v < 0;
+                      const cls = effectiveMode === "change" && i > 0 && typeof v === "number" ? (v >= 0 ? "delta-good" : "delta-bad") : neg ? "neg" : "";
+                      return <td key={p} className={`num ${cls}`}>{cell(r, p, i)}</td>;
+                    })}
+                  </tr>
+                );
+              })}
+              {!filteredRows.length && (
+                <tr>
+                  <td colSpan={periods.length + 1} className="muted center" style={{ padding: 20 }}>
+                    No line items found matching &ldquo;{search}&rdquo;.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* 2. COLUMN FORMAT VIEW */}
+      {layout === "column" && (
+        <div className="spread-wrap table-card">
+          <table className="spread">
+            <thead>
+              <tr>
+                <th scope="col" style={{ minWidth: 120 }}>Period</th>
+                {filteredRows.map((r) => (
+                  <th key={r.account_id} scope="col" className="num" style={{ minWidth: 160, whiteSpace: "nowrap" }}>
+                    <span>{r.account_name}</span>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {periods.map((p, pIdx) => (
+                <tr key={p}>
+                  <th scope="row" style={{ whiteSpace: "nowrap" }}>{fy(p)}</th>
+                  {filteredRows.map((r) => {
                     const v = effectiveMode === "change" ? r.change_pct[p] : effectiveMode === "common" ? r.common_size[p] : r.values[p];
                     const neg = typeof v === "number" && v < 0;
-                    const cls = effectiveMode === "change" && i > 0 && typeof v === "number" ? (v >= 0 ? "delta-good" : "delta-bad") : neg ? "neg" : "";
-                    return <td key={p} className={`num ${cls}`}>{cell(r, p, i)}</td>;
+                    const cls = effectiveMode === "change" && pIdx > 0 && typeof v === "number" ? (v >= 0 ? "delta-good" : "delta-bad") : neg ? "neg" : "";
+                    return (
+                      <td key={r.account_id} className={`num ${cls}`}>
+                        {cell(r, p, pIdx)}
+                      </td>
+                    );
                   })}
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+              ))}
+              {!periods.length && (
+                <tr>
+                  <td colSpan={filteredRows.length + 1} className="muted center" style={{ padding: 20 }}>
+                    No periods available.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {effectiveMode === "change" && <p className="source-note">Change against the previous period. Green and red show direction only, not whether the move is good for that line.</p>}
     </section>
   );

@@ -15,6 +15,7 @@ import { ChatPanel } from "../components/ChatPanel";
 import { AddStatementsDialog } from "../components/AddStatementsDialog";
 import { PeerBenchmarks } from "../components/PeerBenchmarks";
 import { StatementAnalysis } from "../components/StatementAnalysis";
+import { DataExplorer } from "../components/DataExplorer";
 import { Findings, HeadlineFigures, HealthRating, isForecast, MetricSpread, SummaryOpinion } from "../components/Overview";
 import { EmptyState, ErrorNote, Skeleton, Spinner, StatusBadge } from "../components/ui";
 import { useFeedback } from "../components/feedback";
@@ -26,14 +27,12 @@ function StatementsView({ job }: { job: Job }) {
   if (analysis.isLoading) return <div className="stack"><Skeleton h={260} /><Skeleton h={200} /></div>;
   if (!analysis.data) {
     return (
-      <EmptyState title={isActive(job.status) ? "Statement analysis is on its way" : "No statement analysis for this analysis"}>
-        {isActive(job.status)
-          ? "Year-on-year and common-size statements, the profit bridge and DuPont appear once the analysis stage finishes."
-          : "This analysis was run before statement analysis existed, or had no statements or bank transactions to analyse. Add statements to re-run it with the analysis included."}
-      </EmptyState>
+      <div className="stack">
+        <DataExplorer job={job} />
+      </div>
     );
   }
-  return <StatementAnalysis analysis={analysis.data} />;
+  return <StatementAnalysis analysis={analysis.data} job={job} />;
 }
 
 export function JobPage() {
@@ -88,6 +87,16 @@ export function JobPage() {
           onAdded={() => { setAdding(false); setParams({ view: "run" }, { replace: true }); }} />}
 
         {review.data && review.data.length > 0 && <ReviewPanel job={job} items={review.data} />}
+        {job.status === "NEEDS_ANALYST" && (!review.data || review.data.length === 0) && (
+          <div className="alert alert-attention" role="alert" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+            <div>
+              <strong>Analyst Sign-Off Required:</strong> Automated verification flagged discrepancies requiring review before report certification.
+            </div>
+            <button className="btn btn-secondary btn-sm" onClick={() => review.refetch()}>
+              Refresh Diagnostics
+            </button>
+          </div>
+        )}
         {job.status === "FAILED" && (
           <div className="alert alert-danger" role="alert">
             <strong>The analysis stopped.</strong> {job.error || job.progress_message}
@@ -415,6 +424,10 @@ function DataView({ job, results }: { job: Job; results: Results }) {
             </table>
           </div>
         )}
+      </section>
+
+      <section>
+        <DataExplorer job={job} />
       </section>
 
       {results.metrics.data && results.metrics.data.length > 0 && (

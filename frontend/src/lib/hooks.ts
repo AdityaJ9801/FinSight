@@ -5,14 +5,14 @@ import { api } from "./api";
 import { isActive, registerAgents } from "./pipeline";
 import type { Job } from "./types";
 
-const LIVE_MS = 1500;
+const LIVE_MS = 600;
 
 export function useJobs() {
   return useQuery({
     queryKey: ["jobs"],
     queryFn: api.listJobs,
     // Keep the sidebar/list fresh while anything is running.
-    refetchInterval: (q) => (q.state.data?.some((j) => isActive(j.status)) ? 3000 : 20000),
+    refetchInterval: (q) => (q.state.data?.some((j) => isActive(j.status)) ? 1500 : 15000),
   });
 }
 
@@ -39,7 +39,7 @@ export function useInstructions(jobId: string, job: Job | undefined) {
     queryKey: ["instructions", jobId],
     queryFn: () => api.instructions(jobId),
     enabled: !!job,
-    refetchInterval: isActive(job?.status) ? 3000 : false,
+    refetchInterval: isActive(job?.status) ? 1500 : false,
   });
 }
 
@@ -54,12 +54,13 @@ export function useReviewItems(jobId: string, job: Job | undefined) {
 /** Results only exist once the data stage has produced a dataset version. */
 export function useResults(jobId: string, job: Job | undefined) {
   const ready = !!job?.dataset_version_id;
-  const metrics = useQuery({ queryKey: ["metrics", jobId], queryFn: () => api.metrics(jobId), enabled: ready });
-  const findings = useQuery({ queryKey: ["findings", jobId], queryFn: () => api.findings(jobId), enabled: ready });
-  const charts = useQuery({ queryKey: ["charts", jobId], queryFn: () => api.charts(jobId), enabled: ready });
-  const validation = useQuery({ queryKey: ["validation", jobId], queryFn: () => api.validation(jobId), enabled: ready });
+  const live = isActive(job?.status);
+  const metrics = useQuery({ queryKey: ["metrics", jobId], queryFn: () => api.metrics(jobId), enabled: ready, refetchInterval: live ? 800 : false });
+  const findings = useQuery({ queryKey: ["findings", jobId], queryFn: () => api.findings(jobId), enabled: ready, refetchInterval: live ? 800 : false });
+  const charts = useQuery({ queryKey: ["charts", jobId], queryFn: () => api.charts(jobId), enabled: ready, refetchInterval: live ? 800 : false });
+  const validation = useQuery({ queryKey: ["validation", jobId], queryFn: () => api.validation(jobId), enabled: ready, refetchInterval: live ? 1200 : false });
   const health = useQuery({ queryKey: ["health", jobId], queryFn: () => api.health(jobId), enabled: ready, retry: false });
-  const report = useQuery({ queryKey: ["report", jobId], queryFn: () => api.reportExists(jobId), enabled: ready });
+  const report = useQuery({ queryKey: ["report", jobId], queryFn: () => api.reportExists(jobId), enabled: ready, refetchInterval: live ? 1500 : false });
   return { metrics, findings, charts, validation, health, report };
 }
 
@@ -78,7 +79,7 @@ export function useInvalidateOnStatusChange(jobId: string, job: Job | undefined)
 }
 
 export function refreshResults(qc: ReturnType<typeof useQueryClient>, jobId: string) {
-  for (const k of ["metrics", "findings", "charts", "validation", "health", "report", "tasks", "review", "instructions", "benchmarks", "analysis"]) {
+  for (const k of ["metrics", "findings", "charts", "validation", "health", "report", "tasks", "review", "instructions", "benchmarks", "analysis", "data-explorer"]) {
     qc.invalidateQueries({ queryKey: [k, jobId] });
   }
 }
@@ -100,6 +101,17 @@ export function useDetailedAnalysis(jobId: string, job: Job | undefined) {
     queryKey: ["analysis", jobId],
     queryFn: () => api.detailedAnalysis(jobId),
     enabled: !!job?.dataset_version_id,
+    refetchInterval: isActive(job?.status) ? 1000 : false,
+    retry: false,
+  });
+}
+
+export function useDataExplorer(jobId: string, job: Job | undefined) {
+  return useQuery({
+    queryKey: ["data-explorer", jobId],
+    queryFn: () => api.dataExplorer(jobId),
+    enabled: !!job?.dataset_version_id,
+    refetchInterval: isActive(job?.status) ? 1000 : false,
     retry: false,
   });
 }

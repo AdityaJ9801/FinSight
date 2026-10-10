@@ -28,14 +28,18 @@ _PERIOD_HINT = re.compile(
     r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b",
     re.IGNORECASE,
 )
-_CURRENCY_SYMBOLS_RE = re.compile(r"[$€£₹]|rs\.?|inr|usd", re.IGNORECASE)
+_CURRENCY_SYMBOLS_RE = re.compile(r"[$€£₹¥]|rs\.?|inr|usd|eur|gbp|aed|sar|jpy|cny", re.IGNORECASE)
 
-_DATE_COL_NAMES = {"date", "txn_date", "txn date", "transaction date", "value date", "posting date", "dt"}
-_YEAR_COL_NAMES = {"year", "yr", "fiscal year", "fy", "financial year"}
+_DATE_COL_NAMES = {
+    "date", "txn_date", "txn date", "transaction date", "value date", "posting date", "dt",
+    "period", "month", "quarter", "time", "timestamp", "billing date", "invoice date", "trans_date"
+}
+_YEAR_COL_NAMES = {"year", "yr", "fiscal year", "fy", "financial year", "fiscal_year"}
 _METRIC_KEYWORDS = {
     "sales", "revenue", "cogs", "cost", "profit", "income", "expense", "expenses",
     "gross", "margin", "ebitda", "ebit", "tax", "units", "price", "discount", "discounts",
-    "debit", "credit", "balance", "amount", "qty", "quantity", "fee", "fees", "salary", "salaries"
+    "debit", "credit", "balance", "amount", "qty", "quantity", "fee", "fees", "salary", "salaries",
+    "turnover", "opex", "capex", "receipts", "billings"
 }
 
 
@@ -115,12 +119,49 @@ is_columnar_dataset = detect_columnar_dataset
 
 
 def parse_columnar_dataset(grid: list[list], header_idx: int = 0, name: str = "data") -> list:
-    """Parses a columnar table into both:
+    """Parses a columnar table into:
     1. A financial_summary RawTable (aggregates metrics across periods e.g. annual)
-    2. A records RawTable (detailed raw rows with clean numbers)"""
+    2. A records RawTable (detailed raw rows with clean numbers)
+    Also attaches structured_dataset (dimensions, measures, typed records, aggregations)
+    for dynamic attribute analytics, attribute-based charting and chat querying."""
     from app.tools.parsers import RawRow, RawTable
 
-    header = [str(c).strip() if c is not None else "" for c in grid[header_idx]]
+    raw_header = [str(c).strip() if c is not None else "" for c in grid[header_idx]]
+    start_data_idx = header_idx + 1
+
+    # Check for two-tier multi-row headers (e.g. ERP headers: 'Debit', 'Credit' followed by 'Amount', 'Amount')
+    if header_idx + 1 < len(grid):
+        next_row = grid[header_idx + 1]
+        next_vals = [str(c).strip() if c is not None else "" for c in next_row]
+        has_subheaders = any(next_vals) and not any(clean_numeric(c) is not None for c in next_vals if c)
+        if has_subheaders:
+            merged_header = []
+            for j in range(max(len(raw_header), len(next_vals))):
+                h1 = raw_header[j] if j < len(raw_header) else ""
+                h2 = next_vals[j] if j < len(next_vals) else ""
+                if h1 and h2 and h1.lower() != h2.lower():
+                    merged_header.append(f"{h1} {h2}".strip())
+                elif h1:
+                    merged_header.append(h1)
+                elif h2:
+                    merged_header.append(h2)
+                else:
+                    merged_header.append("")
+            raw_header = merged_header
+            start_data_idx = header_idx + 2
+
+    # Clean header strings and de-duplicate
+    header = []
+    seen_cols: dict[str, int] = {}
+    for c in raw_header:
+        base = c.strip() or "Col"
+        if base in seen_cols:
+            seen_cols[base] += 1
+            header.append(f"{base}_{seen_cols[base]}")
+        else:
+            seen_cols[base] = 0
+            header.append(base)
+
     date_col_idx = next((i for i, c in enumerate(header) if c.lower() in _DATE_COL_NAMES or any(k in c.lower() for k in _DATE_COL_NAMES)), None)
     year_col_idx = next((i for i, c in enumerate(header) if c.lower() in _YEAR_COL_NAMES or any(k in c.lower() for k in _YEAR_COL_NAMES)), None)
 
@@ -128,15 +169,15 @@ def parse_columnar_dataset(grid: list[list], header_idx: int = 0, name: str = "d
     for idx, col in enumerate(header):
         if idx in (date_col_idx, year_col_idx):
             continue
-        nums = [clean_numeric(r[idx]) for r in grid[header_idx + 1:] if idx < len(r)]
+        nums = [clean_numeric(r[idx]) for r in grid[start_data_idx:] if idx < len(r)]
         valid_nums = sum(1 for n in nums if n is not None)
-        if valid_nums >= max(1, (len(grid) - header_idx - 1) * 0.4):
+        if valid_nums >= max(1, (len(grid) - start_data_idx) * 0.25):
             numeric_cols[col] = idx
 
     row_periods: list[str | None] = []
     distinct_periods: set[str] = set()
 
-    for row in grid[header_idx + 1:]:
+    for row in grid[start_data_idx:]:
         p = None
         if year_col_idx is not None and year_col_idx < len(row):
             y_str = str(row[year_col_idx]).strip()
@@ -144,7 +185,8 @@ def parse_columnar_dataset(grid: list[list], header_idx: int = 0, name: str = "d
                 p = f"{y_str}-12-31"
         if not p and date_col_idx is not None and date_col_idx < len(row):
             d_str = str(row[date_col_idx]).strip()
-            for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+            for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d-%b-%Y", "%d-%b-%y",
+                        "%b-%y", "%b-%Y", "%B %Y", "%d %b %Y", "%Y/%m/%d", "%m-%d-%Y"):
                 try:
                     dt = datetime.strptime(d_str, fmt).date()
                     p = dt.isoformat()
@@ -169,7 +211,7 @@ def parse_columnar_dataset(grid: list[list], header_idx: int = 0, name: str = "d
 
     summary_data = {col: {p: 0.0 for p in sorted_periods} for col in metric_cols_clean}
 
-    for r_idx, row in enumerate(grid[header_idx + 1:]):
+    for r_idx, row in enumerate(grid[start_data_idx:]):
         p = row_periods[r_idx] or sorted_periods[0]
         first_metric = list(metric_cols_clean.keys())[0] if metric_cols_clean else None
         if first_metric and p not in summary_data[first_metric]:
@@ -198,7 +240,7 @@ def parse_columnar_dataset(grid: list[list], header_idx: int = 0, name: str = "d
     summary_table = RawTable(rows=summary_rows, periods=sorted_periods, name=f"{name}_summary")
 
     record_rows: list[RawRow] = []
-    for r_i, row in enumerate(grid[header_idx + 1:], start=header_idx + 2):
+    for r_i, row in enumerate(grid[start_data_idx:], start=start_data_idx + 1):
         row_vals: dict[str, float] = {}
         for col_name, c_idx in numeric_cols.items():
             if c_idx < len(row):
@@ -216,6 +258,62 @@ def parse_columnar_dataset(grid: list[list], header_idx: int = 0, name: str = "d
             ))
 
     records_table = RawTable(rows=record_rows, periods=list(numeric_cols.keys()), name=f"{name}_records")
+
+    # Dimensions & Structured Dataset Extraction
+    dim_cols = [c for c in header if c not in numeric_cols and c.lower() not in ("id", "index") and c.strip()]
+    records: list[dict] = []
+    for row in grid[start_data_idx:]:
+        if not any(c not in (None, "") for c in row):
+            continue
+        rec: dict = {}
+        for c_idx, col in enumerate(header):
+            if not col or c_idx >= len(row):
+                continue
+            val = row[c_idx]
+            if col in numeric_cols:
+                n_val = clean_numeric(val)
+                rec[col] = n_val if n_val is not None else 0.0
+            else:
+                rec[col] = str(val).strip() if val is not None else ""
+        if rec:
+            records.append(rec)
+
+    # Precompute aggregations for dimensions with reasonable cardinality (2 to 60)
+    aggregations: dict[str, dict] = {}
+    for dim in dim_cols:
+        val_counts: dict[str, int] = {}
+        for r in records:
+            v = str(r.get(dim, "")).strip()
+            if v:
+                val_counts[v] = val_counts.get(v, 0) + 1
+        if 2 <= len(val_counts) <= 60:
+            agg_dim: dict[str, dict] = {}
+            for r in records:
+                v = str(r.get(dim, "")).strip()
+                if not v:
+                    continue
+                if v not in agg_dim:
+                    agg_dim[v] = {m: 0.0 for m in metric_cols_clean}
+                    agg_dim[v]["_count"] = 0
+                for m in metric_cols_clean:
+                    agg_dim[v][m] += float(r.get(m, 0.0) or 0.0)
+                agg_dim[v]["_count"] += 1
+            for v, m_dict in agg_dim.items():
+                for m in metric_cols_clean:
+                    m_dict[m] = round(m_dict[m], 2)
+            aggregations[dim] = agg_dim
+
+    structured_dataset = {
+        "name": name,
+        "dimensions": dim_cols,
+        "measures": list(metric_cols_clean.keys()),
+        "records": records[:3000],
+        "row_count": len(records),
+        "aggregations": aggregations,
+    }
+    summary_table.dataset = structured_dataset
+    records_table.dataset = structured_dataset
+
     return [summary_table, records_table]
 
 

@@ -11,22 +11,43 @@ def _bool(name: str, default: str = "false") -> bool:
 class Config:
     SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", "dev-secret")
 
-    SQLALCHEMY_DATABASE_URI = os.environ.get(
-        "DATABASE_URL", f"sqlite:///{(BASE_DIR / 'instance' / 'finsight.db').as_posix()}"
-    )
+    _raw_db = os.environ.get("DATABASE_URL", "")
+    if not _raw_db:
+        _db_p = BASE_DIR / "instance" / "finsight.db"
+        _db_p.parent.mkdir(parents=True, exist_ok=True)
+        SQLALCHEMY_DATABASE_URI = f"sqlite:///{_db_p.as_posix()}"
+    elif _raw_db.startswith("sqlite:///") and not _raw_db.startswith("sqlite:////"):
+        _rel = _raw_db[len("sqlite:///"):]
+        _p = Path(_rel)
+        if not _p.is_absolute():
+            if (BASE_DIR.parent / "instance" / "finsight.db").exists():
+                _p = BASE_DIR.parent / "instance" / "finsight.db"
+            elif (BASE_DIR / "instance" / "finsight.db").exists():
+                _p = BASE_DIR / "instance" / "finsight.db"
+            else:
+                _p = BASE_DIR / _p
+            _p.parent.mkdir(parents=True, exist_ok=True)
+            SQLALCHEMY_DATABASE_URI = f"sqlite:///{_p.as_posix()}"
+        else:
+            SQLALCHEMY_DATABASE_URI = _raw_db
+    else:
+        SQLALCHEMY_DATABASE_URI = _raw_db
+
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {
         # SQLite + Celery threads: avoid pooled connections outliving a worker thread.
         "pool_pre_ping": True,
+        "connect_args": {"timeout": 60},
     }
 
-    # Always absolute. A relative value (the .env example's "instance/storage") used to be
-    # resolved against the process working directory when files were written, but against
-    # the `app/` package folder by Flask's send_file when they were served -- so every
-    # report download 404'd with "file not found" once a .env existed.
+    # Always absolute.
     STORAGE_ROOT = Path(os.environ.get("STORAGE_ROOT", "") or BASE_DIR / "instance" / "storage")
     if not STORAGE_ROOT.is_absolute():
-        STORAGE_ROOT = BASE_DIR / STORAGE_ROOT
+        if (BASE_DIR.parent / STORAGE_ROOT).exists():
+            STORAGE_ROOT = BASE_DIR.parent / STORAGE_ROOT
+        else:
+            STORAGE_ROOT = BASE_DIR / STORAGE_ROOT
+    STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 
     CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
     CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")

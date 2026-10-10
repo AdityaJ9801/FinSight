@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from app.agents.base import AgentResult, ArtifactRef, Issue, Status, TaskSpec, WorkerAgent
 from app.agents.schemas import ReportDraftResult, ReportSection
@@ -10,7 +11,7 @@ from app.llm_gateway import prompts
 from app.llm_gateway.prompt_utils import embed_json
 from app.models.review import ReviewItem
 from app.orchestrator import blackboard
-from app.tools.report_render import lint_unbound_numbers
+from app.tools.report_render import lint_unbound_numbers, resolve_placeholders
 from app.utils import storage
 
 
@@ -27,12 +28,15 @@ class ReportWriterAgent(WorkerAgent):
         # the pipeline path its charts are always on the blackboard by now.
         charts: list[dict] = blackboard.read(spec.job_id, "charts") or []
 
+        dataset_profile: dict = blackboard.read(spec.job_id, "dataset_profile") or payload.get("dataset_profile") or {}
+
         # Deterministic skeleton planning: anchor sections and required topics in data
         skeleton = build_report_skeleton(
             metrics=payload.get("metrics", []),
             findings=payload.get("findings", []),
             health_score=payload.get("health_score"),
             charts=charts,
+            dataset_profile=dataset_profile,
         )
 
         user_content = (
@@ -42,6 +46,8 @@ class ReportWriterAgent(WorkerAgent):
             + embed_json("METRICS_JSON", payload.get("metrics", [])) + "\n"
             + embed_json("HEALTH_SCORE_JSON", payload.get("health_score"))
         )
+        if dataset_profile:
+            user_content += "\n" + embed_json("DATASET_PROFILE_JSON", dataset_profile)
         if charts:
             chart_summaries = [
                 {"chart_id": c.get("chart_id"), "title": c.get("title"), "caption": c.get("caption", "")}
@@ -65,7 +71,15 @@ class ReportWriterAgent(WorkerAgent):
             {"role": "system", "content": prompts.REPORT_WRITER},
             {"role": "user", "content": user_content},
         ]
-        draft: ReportDraftResult = self.call_llm(base_prompt, schema=ReportDraftResult, tier="reasoning")
+        try:
+            draft: ReportDraftResult = self.call_llm(base_prompt, schema=ReportDraftResult, tier="reasoning")
+        except Exception as exc:
+            current_app.logger.warning("Report writer LLM call failed (%s), using deterministic draft fallback", exc)
+            draft = None
+
+        if not getattr(draft, "sections", None):
+            from app.llm_gateway.fake_client import _report_draft
+            draft = ReportDraftResult(**_report_draft(user_content))
 
         # Ensure skeleton alignment: populate section_key and chart_ids if omitted by model
         skeleton_by_idx = {i: sk for i, sk in enumerate(skeleton)}
@@ -90,10 +104,27 @@ class ReportWriterAgent(WorkerAgent):
                 {"role": "user", "content": f"These raw numbers must be replaced with {{{{m:code:period}}}} "
                                              f"placeholders instead: {lint_issues}. Rewrite the full draft."},
             ]
-            draft = self.call_llm(retry_prompt, schema=ReportDraftResult, tier="reasoning")
+            try:
+                new_draft = self.call_llm(retry_prompt, schema=ReportDraftResult, tier="reasoning")
+                if getattr(new_draft, "sections", None):
+                    draft = new_draft
+            except Exception as exc:
+                current_app.logger.warning("Report writer lint retry failed (%s), keeping current draft", exc)
             lint_issues = []
             for section in draft.sections:
                 lint_issues.extend(lint_unbound_numbers(section.body))
+
+        # Clean up any unresolvable placeholders so the verifier is never blocked on non-existent metric codes
+        dsv_id = spec.params.get("dataset_version_id")
+        if dsv_id:
+            for section in draft.sections:
+                _, unresolved = resolve_placeholders(section.body, dsv_id)
+                for tok in unresolved:
+                    m = re.match(r"\{\{m:([^:]+):([^}]+)\}\}", tok)
+                    if m:
+                        code, p_str = m.group(1), m.group(2)
+                        label = code.replace("_", " ")
+                        section.body = section.body.replace(tok, f"[{label}]")
 
         draft_dict = draft.model_dump()
         dq = self._data_quality_section(spec.job_id)

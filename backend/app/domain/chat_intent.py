@@ -42,6 +42,16 @@ def is_action_request(message: str) -> bool:
     return bool(_ACTION.search(message or ""))
 
 
+_CHART_INTENT = re.compile(
+    r"\b(chart|plot|graph|visualiz|draw a chart|show a chart|create a chart|make a chart|bar chart|line chart|scatter|pie chart)\b",
+    re.IGNORECASE,
+)
+
+
+def is_chart_request(message: str) -> bool:
+    return bool(_CHART_INTENT.search(message or ""))
+
+
 def hinted_agent(message: str, available: list[str]) -> str | None:
     low = (message or "").lower()
     for agent, words in AGENT_HINTS:

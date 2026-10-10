@@ -23,16 +23,25 @@ export function SettingsPage() {
   const { toast } = useFeedback();
   const [backend, setBackend] = useState("auto");
   const [parallel, setParallel] = useState(true);
+  const [workers, setWorkers] = useState(5);
   const [openai, setOpenai] = useState("");
   const [gemini, setGemini] = useState("");
 
   useEffect(() => {
-    if (data) { setBackend(data.configured_backend); setParallel(data.parallel_calls); }
+    if (data) {
+      setBackend(data.configured_backend);
+      setParallel(data.parallel_calls);
+      setWorkers(data.max_concurrent_requests ?? 5);
+    }
   }, [data]);
 
   const save = useMutation({
     mutationFn: () => {
-      const payload: Record<string, unknown> = { backend, parallel_calls: parallel };
+      const payload: Record<string, unknown> = {
+        backend,
+        parallel_calls: parallel,
+        max_concurrent_requests: workers,
+      };
       if (openai.trim()) payload.openai_api_key = openai.trim();
       if (gemini.trim()) payload.gemini_api_key = gemini.trim();
       return api.saveLlm(payload);
@@ -40,18 +49,24 @@ export function SettingsPage() {
     onSuccess: (status) => {
       qc.setQueryData(["llm"], status);
       setOpenai(""); setGemini("");
-      toast("Model settings saved.", "success");
+      toast("Model and worker settings saved.", "success");
     },
     onError: (e: Error) => toast(e.message, "error"),
   });
 
-  const dirty = !!data && (backend !== data.configured_backend || parallel !== data.parallel_calls || !!openai.trim() || !!gemini.trim());
+  const dirty = !!data && (
+    backend !== data.configured_backend ||
+    parallel !== data.parallel_calls ||
+    workers !== (data.max_concurrent_requests ?? 5) ||
+    !!openai.trim() ||
+    !!gemini.trim()
+  );
 
   return (
     <div className="page page-form">
       <header className="page-head">
-        <h1>Model &amp; keys</h1>
-        <p className="lede">Choose the language model the agents use. Keys are saved to the API server's <code>.env</code> file and never shown again in full.</p>
+        <h1>Model &amp; workers</h1>
+        <p className="lede">Choose the language model and configure parallel worker execution for instant analysis. Keys are saved to the server's <code>.env</code> file.</p>
       </header>
 
       {error ? <ErrorNote error={error} /> : isLoading || !data ? <Skeleton h={320} /> : (
@@ -85,14 +100,75 @@ export function SettingsPage() {
             <KeyField id="gemini" label="Gemini API key" placeholder="AIzaSy…" masked={data.masked_keys.gemini} value={gemini} onChange={setGemini} />
           </div>
 
-          <label className="switch switch-row">
-            <input type="checkbox" checked={parallel} onChange={(e) => setParallel(e.target.checked)} />
-            <span className="switch-track" />
-            <span>
-              <span className="choice-title">Run agents in parallel</span>
-              <span className="choice-desc">Up to {data.max_concurrent_requests} model calls at once. Faster, but uses more of your rate limit.</span>
-            </span>
-          </label>
+          <div className="worker-settings-card">
+            <label className="switch switch-row" style={{ margin: 0 }}>
+              <input type="checkbox" checked={parallel} onChange={(e) => setParallel(e.target.checked)} />
+              <span className="switch-track" />
+              <span>
+                <span className="choice-title">Run tasks &amp; agents in parallel</span>
+                <span className="choice-desc">Fans out document parsing, financial analysis modules, and charts simultaneously for maximum speed.</span>
+              </span>
+            </label>
+
+            {parallel && (
+              <div className="worker-slider-wrap">
+                <div className="worker-header-row">
+                  <label className="field-label" htmlFor="worker-slider" style={{ margin: 0 }}>
+                    Concurrent Workers
+                  </label>
+                  <span className="worker-badge">
+                    {workers} parallel worker{workers === 1 ? "" : "s"}
+                  </span>
+                </div>
+
+                <div className="worker-slider-controls">
+                  <input
+                    id="worker-slider"
+                    type="range"
+                    className="worker-range-input"
+                    min={1}
+                    max={20}
+                    step={1}
+                    value={workers}
+                    onChange={(e) => setWorkers(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+                  />
+                  <input
+                    type="number"
+                    className="worker-num-input"
+                    min={1}
+                    max={20}
+                    value={workers}
+                    onChange={(e) => setWorkers(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+                    aria-label="Worker count"
+                  />
+                </div>
+
+                <div className="worker-preset-pills">
+                  <span className="small muted">Speed Presets:</span>
+                  {[
+                    { label: "2 (Conservative)", count: 2 },
+                    { label: "5 (Balanced)", count: 5 },
+                    { label: "8 (Fast Fan-out)", count: 8 },
+                    { label: "12 (Turbo)", count: 12 },
+                    { label: "16 (Max)", count: 16 },
+                  ].map((preset) => (
+                    <button
+                      key={preset.count}
+                      type="button"
+                      className={`worker-pill ${workers === preset.count ? "active" : ""}`}
+                      onClick={() => setWorkers(preset.count)}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                <p className="small muted" style={{ margin: 0 }}>
+                  Controls how many worker threads and simultaneous model requests execute concurrently across document ingestion, financial analysis modules, and delivery DAG generation.
+                </p>
+              </div>
+            )}
+          </div>
 
           <div className="compose-actions">
             <button className="btn btn-primary" disabled={!dirty || save.isPending}>{save.isPending ? <><Spinner /> Saving…</> : "Save settings"}</button>

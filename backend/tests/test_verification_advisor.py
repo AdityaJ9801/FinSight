@@ -147,3 +147,39 @@ def test_verification_advisor_auto_resolve(app):
         updated_fact = FinancialFact.query.get(fact.id)
         assert updated_fact.account_id == "PL.COGS"
         assert updated_fact.confidence == 1.0
+
+
+def test_verification_advisor_verification_review_item(app):
+    with app.app_context():
+        fake_llm = get_llm_gateway()
+        job, dv = _setup_job("Verification review test")
+        job.status = "NEEDS_ANALYST"
+        db.session.commit()
+
+        item = ReviewItem(
+            id=new_id("rev_"), job_id=job.id, kind="verification",
+            payload={
+                "check_code": "VERIFIER_DISCREPANCY",
+                "issues": ["Unbound claims in executive summary", "Unverified ratio Gross Margin"],
+                "explanation": "Flagged discrepancies require analyst review.",
+                "summary": "Report draft requires analyst verification sign-off",
+            }
+        )
+        db.session.add(item)
+        db.session.commit()
+
+        advisor = VerificationAdvisorAgent(fake_llm)
+        spec = TaskSpec(
+            task_id="t_test_verif_resolve", job_id=job.id, tenant_id=job.tenant_id, agent="verification_advisor",
+            goal="auto resolve verification", params={"job_id": job.id, "auto_resolve": True}
+        )
+        res = advisor.run(spec)
+
+        assert res.status.value == "done"
+        updated_item = ReviewItem.query.get(item.id)
+        assert updated_item.status == "resolved"
+        assert "note" in updated_item.resolution
+
+        updated_job = Job.query.get(job.id)
+        assert updated_job.status == "COMPLETED"
+        assert updated_job.progress_pct == 100

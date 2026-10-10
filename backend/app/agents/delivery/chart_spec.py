@@ -99,6 +99,32 @@ class ChartSpecAgent(WorkerAgent):
         ]
         charts: list[dict] = []
         failures = []
+
+        # 1. Dataset-First Dynamic Attribute Charts (drawn from actual dataset attributes)
+        ds_profile = blackboard.read(spec.job_id, "dataset_profile") or {}
+        chart_candidates = ds_profile.get("dynamic_chart_candidates", [])
+        for cand in chart_candidates:
+            try:
+                rendered = self._render(
+                    section_key=cand.get("section_key", "dataset_attributes"),
+                    title=cand["title"],
+                    chart_type=cand["chart_type"],
+                    labels=cand["labels"],
+                    series=cand["series"],
+                    unit=cand.get("unit"),
+                    takeaway=cand.get("takeaway", ""),
+                )
+                if rendered:
+                    charts.append(rendered)
+            except Exception as exc:
+                failures.append(f"dynamic_chart '{cand.get('title')}': {exc}")
+
+        # Preserve any chat-requested custom charts already generated
+        existing_charts = blackboard.read(spec.job_id, "charts") or []
+        chat_charts = [c for c in existing_charts if c.get("is_custom") or c.get("section_key") == "chat_custom"]
+        charts.extend(chat_charts)
+
+        # 2. Predefined Financial Statement & Ratio Charts (when canonical accounts exist)
         # Every amount on axes, labels and takeaways in the documents' own unit (crores for a
         # crore filing), matching the tables and narrative.
         set_thread_scale(display_scale_for(dsv))

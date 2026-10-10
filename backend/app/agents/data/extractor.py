@@ -268,6 +268,9 @@ class ExtractorAgent(WorkerAgent):
         outputs: list[ArtifactRef] = []
         rag_lines: list[str] = []
         total_rows = 0
+        from app.orchestrator import blackboard
+        existing_datasets = blackboard.read(spec.job_id, "structured_datasets") or []
+
         for table in tables:
             rows_payload = [{
                 "row_idx": r.row_idx, "label": r.label, "values": r.values,
@@ -284,6 +287,22 @@ class ExtractorAgent(WorkerAgent):
             ))
             rag_lines.extend(f"{r['label']}: {r['values']}" for r in rows_payload)
             total_rows += len(rows_payload)
+
+            if getattr(table, "dataset", None):
+                ds = {**table.dataset, "doc_id": doc.id, "filename": doc.original_filename}
+                ds_uri = storage.write_text(
+                    f"{spec.job_id}/datasets/{doc.id}_{_safe_name(table.name)}.json",
+                    json.dumps(ds),
+                )
+                outputs.append(ArtifactRef(
+                    id=f"{doc.id}:{table.name}:dataset", kind="structured_dataset", uri=ds_uri,
+                    schema_summary=f"dimensions={ds.get('dimensions')} measures={ds.get('measures')}",
+                    row_count=ds.get("row_count", 0),
+                ))
+                existing_datasets.append(ds)
+
+        if existing_datasets:
+            blackboard.write(spec.job_id, "structured_datasets", existing_datasets)
 
         doc.status = "extracted"
         db.session.commit()

@@ -12,6 +12,7 @@ from app.agents.schemas import VerifierVerdict
 from app.llm_gateway import prompts
 from app.llm_gateway.prompt_utils import embed_json
 from app.models.finding import Finding
+from app.models.metric import Metric
 from app.tools.report_render import lint_unbound_numbers, resolve_placeholders
 from app.utils import storage
 
@@ -62,12 +63,32 @@ class VerifierAgent(WorkerAgent):
 
         findings = Finding.query.filter_by(dataset_version=dataset_version_id).all()
         findings_ctx = [{"title": f.title, "body": f.body} for f in findings]
+        metrics_list = insights_payload.get("metrics")
+        if not metrics_list:
+            db_metrics = Metric.query.filter_by(dataset_version=dataset_version_id).all()
+            metrics_list = [{"code": m.metric_code, "period": m.period_end.isoformat() if m.period_end else None,
+                             "value": float(m.value) if m.value is not None else None, "unit": m.unit,
+                             "formatted": f"{float(m.value)*100:.2f}%" if m.unit == "%" and m.value is not None else str(m.value)}
+                            for m in db_metrics]
+        else:
+            for m in metrics_list:
+                if m.get("unit") == "%" and m.get("value") is not None and "formatted" not in m:
+                    m["formatted"] = f"{float(m['value'])*100:.2f}%"
+
+        health_score = insights_payload.get("health_score")
+        if not health_score:
+            hs_row = Metric.query.filter_by(dataset_version=dataset_version_id, metric_code="health_score").order_by(Metric.period_end.desc()).first()
+            if hs_row and hs_row.value is not None:
+                score = float(hs_row.value)
+                rating = "Strong" if score >= 75 else ("Good" if score >= 60 else ("Moderate" if score >= 40 else "Weak"))
+                health_score = {"score": score, "rating": rating}
+
         prompt = [
             {"role": "system", "content": prompts.VERIFIER},
             {"role": "user", "content": embed_json("DRAFT_JSON", resolved_sections) + "\n"
                                          + embed_json("FINDINGS_JSON", findings_ctx) + "\n"
-                                         + embed_json("METRICS_JSON", insights_payload.get("metrics", [])) + "\n"
-                                         + embed_json("HEALTH_SCORE_JSON", insights_payload.get("health_score"))},
+                                         + embed_json("METRICS_JSON", metrics_list) + "\n"
+                                         + embed_json("HEALTH_SCORE_JSON", health_score)},
         ]
         verdict: VerifierVerdict = self.call_llm(prompt, schema=VerifierVerdict, tier="reasoning")
 

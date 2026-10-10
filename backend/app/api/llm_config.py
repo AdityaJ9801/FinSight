@@ -113,6 +113,16 @@ def update_config():
         os.environ["LLM_PARALLEL_CALLS"] = "true" if parallel else "false"
         env_updates["LLM_PARALLEL_CALLS"] = "true" if parallel else "false"
 
+    if "max_concurrent_requests" in data:
+        try:
+            val = int(data["max_concurrent_requests"])
+            val = max(1, min(val, 32))
+            current_app.config["LLM_MAX_CONCURRENT_REQUESTS"] = val
+            os.environ["LLM_MAX_CONCURRENT_REQUESTS"] = str(val)
+            env_updates["LLM_MAX_CONCURRENT_REQUESTS"] = str(val)
+        except (ValueError, TypeError):
+            pass
+
     if env_updates:
         _update_env_file(env_updates)
 

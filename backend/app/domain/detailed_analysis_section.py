@@ -52,32 +52,100 @@ def _statement_tables(analysis: dict) -> list[dict]:
     periods = analysis.get("periods", [])
     stmts = analysis.get("statements") or {}
     tables = []
-    pl = {r["account_id"]: r for r in stmts.get("PL", [])}
-    if pl and periods:
+
+    # 1. PROFIT & LOSS (Row format: all actual lines found in data)
+    pl_rows_list = stmts.get("PL", [])
+    if pl_rows_list and periods:
         latest = periods[-1]
+        pl_by_id = {r["account_id"]: r for r in pl_rows_list}
+        ordered_accounts = [acc for acc in _PL_LINES if acc in pl_by_id]
+        for r in pl_rows_list:
+            if r["account_id"] not in ordered_accounts:
+                ordered_accounts.append(r["account_id"])
+
         rows = []
-        for acc in _PL_LINES:
-            r = pl.get(acc)
+        for acc in ordered_accounts:
+            r = pl_by_id.get(acc)
             if not r:
                 continue
             rows.append([r["account_name"], *(_amt(r["values"].get(p)) for p in periods),
                          _pct(r["change_pct"].get(latest)) if len(periods) > 1 else "—"])
         tables.append(_table("Horizontal analysis — Profit & Loss", ["Line item", *periods, f"YoY % ({latest})"], rows,
                              "Each line's value by period and its change in the latest period."))
+
         cs_rows = []
-        for acc in _PL_LINES:
-            r = pl.get(acc)
+        for acc in ordered_accounts:
+            r = pl_by_id.get(acc)
             if r and any(r["common_size"].get(p) is not None for p in periods):
                 cs_rows.append([r["account_name"], *(_pct(r["common_size"].get(p)) for p in periods)])
         if cs_rows:
             tables.append(_table("Common-size P&L — % of revenue", ["Line item", *periods], cs_rows,
                                  "Vertical analysis: cost lines rising as a share of revenue compress margins."))
-    bs = {r["account_id"]: r for r in stmts.get("BS", [])}
-    if bs and periods:
-        rows = [[bs[a]["account_name"], *(_pct(bs[a]["common_size"].get(p)) for p in periods)]
-                for a in _BS_LINES if a in bs and any(bs[a]["common_size"].get(p) is not None for p in periods)]
-        if rows:
-            tables.append(_table("Balance sheet composition — % of total assets", ["Line item", *periods], rows))
+
+    # 2. BALANCE SHEET (Row format: all actual lines found in data)
+    bs_rows_list = stmts.get("BS", [])
+    if bs_rows_list and periods:
+        bs_by_id = {r["account_id"]: r for r in bs_rows_list}
+        ordered_bs = [acc for acc in _BS_LINES if acc in bs_by_id]
+        for r in bs_rows_list:
+            if r["account_id"] not in ordered_bs:
+                ordered_bs.append(r["account_id"])
+
+        latest = periods[-1]
+        bs_val_rows = []
+        for acc in ordered_bs:
+            r = bs_by_id.get(acc)
+            if not r:
+                continue
+            bs_val_rows.append([r["account_name"], *(_amt(r["values"].get(p)) for p in periods),
+                                _pct(r["change_pct"].get(latest)) if len(periods) > 1 else "—"])
+        if bs_val_rows:
+            tables.append(_table("Horizontal analysis — Balance Sheet", ["Line item", *periods, f"YoY % ({latest})"], bs_val_rows,
+                                 "Balance sheet line items across reporting periods."))
+
+        cs_bs_rows = []
+        for acc in ordered_bs:
+            r = bs_by_id.get(acc)
+            if r and any(r["common_size"].get(p) is not None for p in periods):
+                cs_bs_rows.append([r["account_name"], *(_pct(r["common_size"].get(p)) for p in periods)])
+        if cs_bs_rows:
+            tables.append(_table("Balance sheet composition — % of total assets", ["Line item", *periods], cs_bs_rows))
+
+    # 3. CASH FLOW (Row format: all lines in CF)
+    cf_rows_list = stmts.get("CF", [])
+    if cf_rows_list and periods:
+        latest = periods[-1]
+        cf_rows = []
+        for r in cf_rows_list:
+            cf_rows.append([r["account_name"], *(_amt(r["values"].get(p)) for p in periods),
+                            _pct(r["change_pct"].get(latest)) if len(periods) > 1 else "—"])
+        if cf_rows:
+            tables.append(_table("Cash Flow Statement Analysis", ["Cash Flow Item", *periods, f"YoY % ({latest})"], cf_rows))
+
+    # 4. COLUMN FORMAT SUMMARY TABLE (Periods as rows, key attributes as columns)
+    if periods and (pl_rows_list or bs_rows_list):
+        pl_by_id = {r["account_id"]: r for r in pl_rows_list}
+        bs_by_id = {r["account_id"]: r for r in bs_rows_list}
+        cf_by_id = {r["account_id"]: r for r in (cf_rows_list or [])}
+        col_headers = ["Period"]
+        attr_sources = []
+        for code, label in [("PL.REVENUE", "Revenue"), ("PL.COGS", "COGS"), ("PL.PAT", "PAT"),
+                            ("BS.TOTAL_ASSETS", "Total Assets"), ("BS.EQ.TOTAL", "Total Equity"),
+                            ("BS.CA.CASH", "Cash"), ("CF.OPERATING", "Operating Cash Flow")]:
+            source_map = pl_by_id if code.startswith("PL") else (bs_by_id if code.startswith("BS") else cf_by_id)
+            if code in source_map:
+                col_headers.append(label)
+                attr_sources.append((code, source_map))
+        if len(col_headers) > 1:
+            col_rows = []
+            for p in periods:
+                row_vals = [p]
+                for code, src in attr_sources:
+                    row_vals.append(_amt(src[code]["values"].get(p)))
+                col_rows.append(row_vals)
+            tables.append(_table("Multi-Period Attributes Summary (Columnar View)", col_headers, col_rows,
+                                 "Key financial attributes arranged as columns across historical reporting periods."))
+
     return tables
 
 

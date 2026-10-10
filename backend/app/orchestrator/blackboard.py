@@ -19,6 +19,8 @@ ARTIFACTS: dict[str, str] = {
     "draft": "delivery/draft.json",              # ReportWriterAgent: placeholder draft + deterministic appendices
     "forecast": "analysis/forecast.json",        # ForecastAgent: forecast values + uncertainty range per series
     "detailed_analysis": "analysis/detailed.json",  # DetailedAnalyticsAgent: statement/DuPont/bridge/bank analytics
+    "structured_datasets": "data/structured_datasets.json",  # ExtractorAgent: tabular/dimensional attributes & records
+    "dataset_profile": "analysis/dataset_profile.json",      # DatasetAnalyzer: dataset-first intelligence & drivers
 }
 
 

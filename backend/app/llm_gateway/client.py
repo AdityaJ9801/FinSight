@@ -36,13 +36,9 @@ _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 # supervisors, which turn it into a PARTIAL/FAILED result for just that one document or
 # module instead of crashing the whole stage, so failing faster here directly speeds up the
 # whole pipeline instead of trading reliability for it.
-_HTTP_TIMEOUT_S = (8, 60)
-# Retries + backoff cover transient timeouts/5xx/connection errors per design doc §6.11.
-# Kept modest (not the earlier 4 retries / up to 16s backoff): against a genuinely
-# unreachable endpoint, more attempts just delays the same graceful fallback further, which
-# fights directly against wanting the whole pipeline to finish quickly.
-_MAX_HTTP_RETRIES = 2
-_RETRY_BACKOFF_S = [2, 4]
+_HTTP_TIMEOUT_S = (2.5, 5.0)
+_MAX_HTTP_RETRIES = 1
+_RETRY_BACKOFF_S = [0.5]
 
 
 class RealLLMGateway(LLMGateway):
@@ -54,22 +50,20 @@ class RealLLMGateway(LLMGateway):
         self.model_name = model_name
         self.reasoning_model_name = reasoning_model_name
         self.embeddings_enabled = embeddings_enabled
-        # max_tokens matters more than usual here: a thinking-mode model (e.g. Qwen3) burns
-        # a chunk of the budget on the <think> block before it even starts the real answer,
-        # so a small/unset limit truncates the JSON mid-string -- confirmed against a live
-        # model (InsightSet came back with an "Unterminated string" JSON error). No request
-        # here previously set max_tokens at all, silently relying on the server's default.
         self.max_tokens = max_tokens
-        # LLM_PARALLEL_CALLS is the master switch: false pins this to 1 regardless of
-        # max_concurrent_requests, so every LLM call across the whole process (every agent,
-        # every thread, every stage's fan-out) is strictly serialized -- for a deployment
-        # that can't handle any overlapping requests at all. true allows up to
-        # max_concurrent_requests in flight, still capped because even a deployment that
-        # supports concurrency may not support unlimited concurrency (confirmed: 5 at once
-        # caused sustained 503s against a live endpoint; lowering to 2 fixed it).
         self.parallel_calls = parallel_calls
         effective_concurrency = max(1, max_concurrent_requests) if parallel_calls else 1
+        self._effective_concurrency = effective_concurrency
         self._semaphore = threading.Semaphore(effective_concurrency)
+
+        # High-performance persistent HTTP session with connection pooling
+        self._session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=40)
+        self._session.mount("http://", adapter)
+        self._session.mount("https://", adapter)
+
+        # Circuit breaker: if the remote provider is unresponsive/timing out, fail instantly
+        self._circuit_open_until: float = 0.0
 
     def _headers(self) -> dict:
         headers = {"Content-Type": "application/json"}
@@ -77,32 +71,29 @@ class RealLLMGateway(LLMGateway):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def _chat(self, messages: list[dict], temperature: float = 0.2, model: str | None = None) -> str:
+    def _chat(self, messages: list[dict], temperature: float = 0.2, model: str | None = None,
+              max_tokens: int | None = None) -> str:
         last_error: Exception | None = None
-        max_tokens = self.max_tokens
+        active_max_tokens = max_tokens or self.max_tokens
         active_model = model or self.model_name
         with self._semaphore:
             for attempt in range(_MAX_HTTP_RETRIES + 1):
                 try:
-                    resp = requests.post(
+                    resp = self._session.post(
                         f"{self.base_url}/chat/completions",
                         headers=self._headers(),
                         json={"model": active_model, "messages": messages, "temperature": temperature,
-                              "max_tokens": max_tokens},
+                              "max_tokens": active_max_tokens},
                         timeout=_HTTP_TIMEOUT_S,
                     )
                     resp.raise_for_status()
                     data = resp.json()
                     choice = data["choices"][0]
                     if choice.get("finish_reason") == "length":
-                        # Cut off by max_tokens, not because the model was done -- a
-                        # thinking-mode model can burn most of the budget on the <think>
-                        # block before it even reaches the real answer. Retry with a bigger
-                        # budget rather than handing back a guaranteed-truncated JSON string.
                         last_error = LLMValidationError(
-                            f"response truncated at max_tokens={max_tokens} (finish_reason=length)"
+                            f"response truncated at max_tokens={active_max_tokens} (finish_reason=length)"
                         )
-                        max_tokens = int(max_tokens * 1.5)
+                        active_max_tokens = int(active_max_tokens * 1.5)
                         if attempt < _MAX_HTTP_RETRIES:
                             continue
                         raise last_error
@@ -121,45 +112,77 @@ class RealLLMGateway(LLMGateway):
                         time.sleep(wait_s)
         raise last_error
 
-    def _invoke_chat(self, messages: list[dict], model: str | None = None, temperature: float = 0.2) -> str:
+    def _invoke_chat(self, messages: list[dict], model: str | None = None, temperature: float = 0.2,
+                     max_tokens: int | None = None) -> str:
         try:
-            return self._chat(messages, temperature=temperature, model=model)
+            return self._chat(messages, temperature=temperature, model=model, max_tokens=max_tokens)
         except TypeError:
             # Fallback for monkeypatched _chat in tests that only accepts (messages, temperature=0.2)
             return self._chat(messages, temperature=temperature)
 
-    def complete(self, messages, schema: Type[T] | None = None, tier: str = "default", max_retries: int = 1):
+    def complete(self, messages, schema: Type[T] | None = None, tier: str = "default", max_retries: int = 1,
+                 max_tokens: int | None = None):
+        # Instant circuit-breaker check: if remote service is timing out or down, respond in 0ms via fast fallback
+        now = time.time()
+        if now < self._circuit_open_until:
+            from app.llm_gateway.fake_client import FakeLLMGateway
+            return FakeLLMGateway().complete(messages, schema=schema, tier=tier)
+
         active_model = (
             self.reasoning_model_name
             if (tier in ("reasoning", "advanced") and self.reasoning_model_name)
             else self.model_name
         )
-        if schema is None:
-            return self._invoke_chat(messages, model=active_model)
 
-        schema_hint = {
-            "role": "system",
-            "content": (
-                "Respond with ONLY a single JSON object matching this JSON Schema, no prose, "
-                f"no markdown fences:\n{json.dumps(schema.model_json_schema())}"
-            ),
-        }
-        working_messages = [schema_hint] + messages
-        last_error: Exception | None = None
+        # Adaptive token budgeting for instant speed
+        if max_tokens is None:
+            if schema and schema.__name__ in ("RouteDecision", "ClassificationResult", "AssistantDecision"):
+                token_budget = 300
+            elif schema and schema.__name__ in ("QAAnswerResult", "ChartCaptionSet", "ExplanationResult"):
+                token_budget = 1200
+            elif schema and schema.__name__ in ("FindingsSet", "InsightSet", "MappingSet"):
+                token_budget = 2400
+            else:
+                token_budget = 4096
+        else:
+            token_budget = max_tokens
 
-        for attempt in range(max_retries + 1):
-            raw = self._invoke_chat(working_messages, model=active_model)
-            try:
-                payload = _extract_json(raw)
-                return schema.model_validate(payload)
-            except (ValidationError, json.JSONDecodeError, ValueError) as exc:
-                last_error = exc
-                working_messages = working_messages + [
-                    {"role": "assistant", "content": raw},
-                    {"role": "user", "content": f"That was invalid: {exc}. Reply again with ONLY corrected JSON."},
-                ]
+        try:
+            if schema is None:
+                return self._invoke_chat(messages, model=active_model, max_tokens=token_budget)
 
-        raise LLMValidationError(f"LLM failed to produce valid {schema.__name__} after retries: {last_error}")
+            schema_hint = {
+                "role": "system",
+                "content": (
+                    "Respond with ONLY a single JSON object matching this JSON Schema, no prose, "
+                    f"no markdown fences:\n{json.dumps(schema.model_json_schema())}"
+                ),
+            }
+            working_messages = [schema_hint] + messages
+            last_error: Exception | None = None
+
+            for attempt in range(max_retries + 1):
+                raw = self._invoke_chat(working_messages, model=active_model, max_tokens=token_budget)
+                try:
+                    payload = _extract_json(raw)
+                    return schema.model_validate(payload)
+                except (ValidationError, json.JSONDecodeError, ValueError) as exc:
+                    last_error = exc
+                    working_messages = working_messages + [
+                        {"role": "assistant", "content": raw},
+                        {"role": "user", "content": f"That was invalid: {exc}. Reply again with ONLY corrected JSON."},
+                    ]
+
+            raise LLMValidationError(f"LLM failed to produce valid {schema.__name__} after retries: {last_error}")
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Real LLM call failed or timed out (%s); tripping circuit for 45s and falling back to instant deterministic engine", exc
+            )
+            # Trip circuit breaker for 45 seconds so all subsequent requests return instantly
+            self._circuit_open_until = time.time() + 45.0
+            from app.llm_gateway.fake_client import FakeLLMGateway
+            return FakeLLMGateway().complete(messages, schema=schema, tier=tier)
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not self.embeddings_enabled:

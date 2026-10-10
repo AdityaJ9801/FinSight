@@ -63,7 +63,7 @@ def _process_document(app: Flask, llm, job_id: str, document_id: str, dataset_ve
             # needing its own row-label -> canonical-account mapping.
             map_results: list[AgentResult] = []
             if extract_result.status == Status.DONE and doc.doc_type in _NEEDS_MAPPING:
-                for artifact in extract_result.outputs:
+                for artifact in [a for a in extract_result.outputs if a.kind == "table"]:
                     table_name = artifact.id.split(":", 1)[1] if ":" in artifact.id else None
                     map_results.append(SchemaMapperAgent(llm).run(_make_spec(
                         job, "schema_mapper",
@@ -97,7 +97,8 @@ class DataSupervisor:
         mapper_guidance = (guidance or {}).get("schema_mapper")
 
         results = []
-        with ThreadPoolExecutor(max_workers=min(8, max(1, len(documents)))) as pool:
+        max_workers = self.app.config.get("LLM_MAX_CONCURRENT_REQUESTS", 8) if self.app.config.get("LLM_PARALLEL_CALLS", True) else 1
+        with ThreadPoolExecutor(max_workers=min(max_workers, max(1, len(documents)))) as pool:
             futures = [
                 pool.submit(_process_document, self.app, self.llm, job.id, doc.id, dataset_version_id, mapper_guidance)
                 for doc in documents
@@ -146,11 +147,15 @@ class DataSupervisor:
         # misclassification meant no document ever reached the mapper). "Usable data" is any
         # of the three things the analysis modules can work from: statement facts, bank
         # transactions (cash_wc/risk, see calc/bank_metrics.py) or GST returns (gst). Counting
-        # facts alone blocked every bank-statement-only analysis at this gate forever.
+        from app.orchestrator import blackboard
+        structured_datasets = blackboard.read(job.id, "structured_datasets") or []
+        structured_rows = sum(ds.get("row_count", 0) for ds in structured_datasets)
+
         usable_rows = (
             FinancialFact.query.filter_by(dataset_version=dataset_version_id).count()
             + BankTransaction.query.filter_by(dataset_version=dataset_version_id).count()
             + GstReturn.query.filter_by(dataset_version=dataset_version_id).count()
+            + structured_rows
         )
         if usable_rows == 0:
             if "NO_FACTS" in accepted_checks:

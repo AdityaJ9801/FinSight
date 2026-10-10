@@ -106,6 +106,29 @@ def _parse_period(value: str) -> date | None:
             y += 2000
         return date(y, 3, 31)
 
+    # 6.5 Match Quarter e.g. 'Q1 2024', 'Q1-2024', '2024 Q1', '2024-Q1', 'Q1FY24'
+    m_q = re.search(r"Q([1-4])\s*[-–/]?\s*(?:FY\s*)?(\d{2,4})|(\d{4})\s*[-–/]?\s*Q([1-4])", cleaned, re.IGNORECASE)
+    if m_q:
+        q_num = int(m_q.group(1) or m_q.group(4))
+        raw_y = m_q.group(2) or m_q.group(3)
+        y = int(raw_y)
+        if y < 100:
+            y += 2000
+        q_ends = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
+        m_val, d_val = q_ends[q_num]
+        return date(y, m_val, d_val)
+
+    # 6.6 Match Half-Year e.g. 'H1 2024', 'H2 2024'
+    m_h = re.search(r"H([1-2])\s*[-–/]?\s*(?:FY\s*)?(\d{2,4})|(\d{4})\s*[-–/]?\s*H([1-2])", cleaned, re.IGNORECASE)
+    if m_h:
+        h_num = int(m_h.group(1) or m_h.group(4))
+        raw_y = m_h.group(2) or m_h.group(3)
+        y = int(raw_y)
+        if y < 100:
+            y += 2000
+        m_val, d_val = (6, 30) if h_num == 1 else (12, 31)
+        return date(y, m_val, d_val)
+
     # 7. Match bare 4-digit year e.g. '2026'
     m_year = re.search(r"\b(20\d{2}|19\d{2})\b", cleaned)
     if m_year:
@@ -129,7 +152,9 @@ class SchemaMapperAgent(WorkerAgent):
         doc = Document.query.get(document_id)
 
         payload = json.loads(storage.resolve(raw_table_uri).read_text())
-        rows = payload["rows"]
+        rows = payload.get("rows", [])
+        if not rows:
+            return AgentResult(task_id=spec.task_id, status=Status.DONE, summary="No rows to map in table artifact.")
         table_name = spec.params.get("table_name")
         table_name = None if table_name in (None, "csv") else table_name
 

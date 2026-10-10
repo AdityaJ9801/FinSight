@@ -126,3 +126,16 @@ def get_validation(job_id):
         "actual": float(r.actual) if r.actual is not None else None,
         "diff": float(r.diff) if r.diff is not None else None, "details": r.details,
     } for r in rows])
+
+
+@bp.get("/<job_id>/data-explorer")
+def get_data_explorer(job_id):
+    """Dynamically inspects what attributes are present in the uploaded data and returns
+    them formatted in both Row format (horizontal statement layout) and Column format
+    (transposed columnar layout)."""
+    job = _scoped_job(job_id)
+    if job is None or job.dataset_version_id is None:
+        return jsonify(error="not found"), 404
+    from app.domain.data_explorer import inspect_dataset_attributes
+    data = inspect_dataset_attributes(job_id, job.dataset_version_id)
+    return jsonify(data)

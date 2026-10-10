@@ -130,10 +130,16 @@ REPORT_WRITER = (
     "For each section, draw on INSIGHTS_JSON (ranked takeaways), FINDINGS_JSON (every module's detailed observations), "
     "METRICS_JSON (every computed ratio/metric, including any *_forecast series), and HEALTH_SCORE_JSON. If CHARTS_JSON "
     "is provided, associate relevant chart_ids with their matching section.\n"
-    "Every financial number or ratio MUST be written as a {{m:metric_code:period_end}} placeholder (e.g. "
-    "{{m:current_ratio:2026-03-31}}). Direct raw digit sequences (except calendar years/dates) will be rejected "
-    "by automated linting. If USER_GUIDANCE_JSON is given, weave its instructions seamlessly into the relevant "
-    "section narratives. A separate Data Diagnostic & Quality section is appended automatically -- do not write one. "
+    "CRITICAL RULES FOR PLACEHOLDERS AND DATES:\n"
+    "1. Every financial ratio, percentage, rupee amount, margin, or growth rate MUST be written as a "
+    "{{m:metric_code:period_end}} placeholder (e.g. {{m:gross_profit_pct:2022-12-31}}). Use ONLY metric codes that exist "
+    "in METRICS_JSON. NEVER invent non-existent placeholder codes (such as health_score_max, forecast_year, etc.).\n"
+    "2. Calendar years, dates, and period labels (e.g. '2022', 'FY2021', 'for the period ending 2022-12-31') MUST be written "
+    "directly as plain text. NEVER wrap dates or years in {{m:...}} placeholders!\n"
+    "3. Always place the metric placeholder in the grammatical value position and the year in the time position "
+    "(e.g. 'gross profit margin was {{m:gross_profit_pct:2022-12-31}} in 2022').\n"
+    "If USER_GUIDANCE_JSON is given, weave its instructions seamlessly into the relevant section narratives. "
+    "A separate Data Diagnostic & Quality section is appended automatically -- do not write one. "
     + NO_OUTSIDE_KNOWLEDGE
 )
 
@@ -143,11 +149,17 @@ VERIFIER = (
     "unsupported claims, wrong direction words (e.g. 'improved' when the value fell), and "
     "recommendations that don't trace to anything given. A claim IS supported if it matches "
     "a value/trend in METRICS_JSON, even if no FINDINGS_JSON entry phrases it the same way -- "
-    "don't reject a claim just because it isn't restated in a finding. A number rounded from "
-    "its exact METRICS_JSON value (e.g. 0.1977 written as '0.20', 189.863 written as '190') "
-    "is normal report formatting, NOT an unsupported claim -- only flag a number that's "
-    "actually wrong (wrong direction, wrong order of magnitude, or no matching metric at "
-    "all), never a rounding difference. " + NO_OUTSIDE_KNOWLEDGE
+    "don't reject a claim just because it isn't restated in a finding.\n"
+    "CRITICAL FORMATTING & UNIT RULES:\n"
+    "1. All percentage metrics (unit '%') in METRICS_JSON are stored as decimal fractions: "
+    "a value of 0.2325 means 23.25%, 0.1335 means 13.35%, 0.8918 means 89.18%, 1.4413 means 144.13%. "
+    "When the draft writes '23.25%' or '13.35%', this matches 0.2325 and 0.1335 EXACTLY and is 100% correct. "
+    "DO NOT claim that the value is 0.2325%!\n"
+    "2. A number rounded from its exact METRICS_JSON value (e.g. 0.1977 written as '19.8%' or '0.20', "
+    "189.863 written as '190') is normal report formatting, NOT an unsupported claim.\n"
+    "3. Only flag a number that is actually wrong (wrong direction, wrong order of magnitude, or no "
+    "matching metric at all), never a rounding or percentage fraction representation difference. "
+    + NO_OUTSIDE_KNOWLEDGE
 )
 
 ORCHESTRATOR_INSTRUCTION = (

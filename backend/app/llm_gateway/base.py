@@ -24,6 +24,7 @@ class LLMGateway(ABC):
         schema: Type[T] | None = None,
         tier: str = "default",
         max_retries: int = 1,
+        max_tokens: int | None = None,
     ) -> T | str:
         """If schema is given, returns a validated instance of it. Otherwise returns raw text."""
 
