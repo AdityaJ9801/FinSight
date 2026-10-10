@@ -5,7 +5,16 @@
 # service to start) and reused, instead of three parallel builds of identical code.
 x-backend: &backend
   image: finsight-backend:local
-  env_file: ./backend/.env.docker
+  env_file:
+    - path: ./backend/.env.docker
+      required: false
+    - path: ./backend/.env.docker.example
+      required: false
+  environment:
+    - DATABASE_URL=sqlite:///finsight.db
+    - STORAGE_ROOT=/app/instance/storage
+    - CELERY_BROKER_URL=redis://redis:6379/0
+    - CELERY_RESULT_BACKEND=redis://redis:6379/1
   volumes:
     - instance_data:/app/instance
 
@@ -24,7 +33,9 @@ services:
   # re-running `docker compose up` (or pulling a release with new tables) is safe.
   init:
     <<: *backend
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     command: flask init-db
     depends_on:
       redis:
@@ -34,6 +45,12 @@ services:
     <<: *backend
     ports:
       - "5000:5000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     depends_on:
       redis:
         condition: service_healthy
@@ -54,13 +71,22 @@ services:
   # React app served by nginx, which forwards /api/* to the api service over the Docker
   # network -- the browser only ever talks to http://localhost:8080.
   web:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     environment:
       API_URL: http://api:5000
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   instance_data:

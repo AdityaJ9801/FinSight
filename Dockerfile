@@ -1,6 +1,5 @@
-# FinSight API + Celery worker image. The same image runs both; docker-compose (or your
-# platform) picks the command: the API by default, `celery -A app.workers.celery_app worker`
-# for the worker, and `flask init-db` once to create the schema.
+# FinSight API + Celery Worker unified root Dockerfile
+# Builds the backend application from repository root for direct Docker builds and CI/CD registries.
 FROM python:3.12-slim-bookworm
 
 WORKDIR /app
@@ -13,11 +12,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY backend/requirements.txt requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
-COPY . .
+COPY backend/ .
 
 ENV FLASK_APP=run.py \
     PYTHONUNBUFFERED=1 \
@@ -29,7 +28,4 @@ EXPOSE 5000
 HEALTHCHECK --interval=20s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:${PORT}/api/health || exit 1
 
-# gthread workers: the live-progress SSE endpoint holds a thread open while it polls, and
-# chat-triggered agent re-runs can take minutes, hence threads plus a long timeout.
-# PORT is honoured so platforms that inject one (Render, Railway, Cloud Run) work unchanged.
 CMD ["sh", "-c", "gunicorn run:app --bind 0.0.0.0:${PORT} --workers 2 --worker-class gthread --threads 8 --timeout 600"]

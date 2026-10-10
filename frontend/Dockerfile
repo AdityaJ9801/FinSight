@@ -20,3 +20,6 @@ COPY --from=build /web/dist /usr/share/nginx/html
 ENV API_URL=http://api:5000 \
     PORT=8080
 EXPOSE 8080
+
+HEALTHCHECK --interval=20s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget -q --spider http://localhost:${PORT}/ || exit 1
